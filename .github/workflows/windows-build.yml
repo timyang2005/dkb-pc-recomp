@@ -1,0 +1,57 @@
+name: DKB Windows build
+
+# The windows job of dkb-release.yml, runnable from a branch so a localization can be built and downloaded without
+# tagging. tools/build_xlate.py publishes the shader translator; tools/make_release.py assembles
+# DKB-Setup-<version>-windows.zip from pinned downloads and the tree: the launcher compiled from installer/launcher
+# with llvm-mingw, the embeddable Python with the installer's wheels and Tk, the installer with its Chinese catalog, the
+# runtime sources, ninja and the SDL3 bits. make_release then builds every installer screen in every language from the
+# packaged folder with its own Python before it writes the zip, so a broken catalog fails this run.
+#
+# Nothing here is derived from the game: the playable dkb.exe is compiled on the player's machine from their own dump
+# (installer/bananza.py, docs/installer.md), so a fork or a release carries the sources and the tools only.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["zh-cn"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setup-zip:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tools/make_release.py stamps the commit into VERSION
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5   # make_release.py installs the installer's wheels with uv
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Refuse anything derived from the game
+        run: python tools/check_content.py
+      - name: Build the shader translator (totk_xlate.exe)
+        run: python tools/build_xlate.py
+      - name: Assemble the setup folder, check it and write the zip
+        run: python tools/make_release.py --game dkb --zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DKB-Setup-windows
+          path: build/release/DKB-Setup-*-windows.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: totk_xlate-windows
+          path: |
+            build/xlate/totk_xlate.exe
+            build/xlate/totk_xlate.id
+          if-no-files-found: error
