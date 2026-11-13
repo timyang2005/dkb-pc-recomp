@@ -1,6 +1,6 @@
 // Catalog of the text the host shows the player (ui_text.h). One array per catalog language, indexed by UiTextId: a new
 // string gets an id in ui_text.h and an entry in every language that has one (a missing entry falls back to English).
-// The software keyboard has every language; the menu has English and Russian.
+// The software keyboard has every language; the menu has English, Russian and Simplified Chinese.
 #include <stdatomic.h>
 #include <string.h>
 
@@ -250,7 +250,8 @@ static const char *const text_en[UI_TEXT_COUNT] = {
     [UI_PAD_CROSS] = "Cross", [UI_PAD_CIRCLE] = "Circle", [UI_PAD_SQUARE] = "Square", [UI_PAD_TRIANGLE] = "Triangle",
 
     [UI_MENU_MENU_LANG] = "Settings language", [UI_MENU_MENU_LANG_DESC] = "Sets the language of the settings menu and performance overlay. System default uses "
-                             "Russian when your system language is Russian, and English otherwise.",
+                             "Russian when your system language is Russian, Chinese when it is Chinese, and English "
+                             "otherwise.",
     [UI_MENU_MENU_LANG_AUTO] = "System default",
     [UI_MENU_THEME] = "Menu theme", [UI_MENU_THEME_DK] = "Donkey Kong", [UI_MENU_THEME_CLASSIC] = "Classic",
     [UI_MENU_THEME_DESC] = "Choose the Donkey Kong theme or the classic green and gold theme.",
@@ -717,7 +718,350 @@ SWKBD_ONLY(text_es, "Introducir texto", "Introduce un nombre", "Caballo", "Acept
            "Mando: A = Aceptar, B = Cancelar");
 SWKBD_ONLY(text_nl, "Tekstinvoer", "Voer een naam in", "Paard", "OK", "Annuleren", "Controller: A = OK, B = Annuleren");
 SWKBD_ONLY(text_pt, "Inserir texto", "Introduz um nome", "Cavalo", "OK", "Cancelar", "Comando: A = OK, B = Cancelar");
-SWKBD_ONLY(text_zh_hans, "文字输入", "请输入名字", "马儿", "确定", "取消", "手柄：A 确定，B 取消");
+// Simplified Chinese carries the whole menu; Traditional Chinese keeps the software keyboard only (a row with no menu
+// text falls back to English).
+static const char *const text_zh_hans[UI_TEXT_COUNT] = {
+    SWKBD("文字输入", "请输入名字", "马儿", "确定", "取消", "手柄：A 确定，B 取消"),
+
+    [UI_MENU_TITLE] = "设置",
+    [UI_MENU_TAB_DISPLAY] = "显示", [UI_MENU_TAB_GRAPHICS] = "图形",
+    [UI_MENU_TAB_GAME] = "游戏", [UI_MENU_TAB_SOUND] = "声音",
+    [UI_MENU_TAB_CONTROLS] = "操作", [UI_MENU_TAB_MENU] = "菜单", [UI_MENU_TAB_ADVANCED] = "高级",
+    [UI_MENU_CONTINUE] = "继续", [UI_MENU_QUIT] = "退出游戏",
+    [UI_MENU_ON] = "开", [UI_MENU_OFF] = "关", [UI_MENU_AUTO] = "自动", [UI_MENU_IS_DEFAULT] = "默认",
+    [UI_MENU_AFTER_RESTART] = "需要重启", [UI_MENU_SET_BY_ENV] = "被环境变量锁定",
+    [UI_MENU_SAVE_FAILED] = "无法保存设置",
+    [UI_MENU_VERSION] = "DKB Recomp %s，游戏 %s",
+
+    [UI_MENU_FULLSCREEN] = "全屏", [UI_MENU_FULLSCREEN_DESC] = "让游戏铺满屏幕；按 F11 切换。",
+    [UI_MENU_WINDOW_MODE] = "窗口模式",
+    [UI_MENU_WINDOW_MODE_DESC] = "按 F11 在窗口模式和你上次使用的全屏模式之间切换。",
+    [UI_MENU_WINDOW_MODE_WINDOWED] = "窗口", [UI_MENU_WINDOW_MODE_BORDERLESS] = "无边框",
+    [UI_MENU_WINDOW_MODE_FULLSCREEN] = "全屏",
+    [UI_MENU_WINDOW_SIZE] = "窗口大小", [UI_MENU_WINDOW_SIZE_DESC] = "设置窗口模式下桌面窗口的大小。",
+    [UI_MENU_WINDOW_SIZE_CUSTOM] = "自定义",
+    [UI_MENU_WINDOWED_ONLY] = "仅在窗口模式下可用",
+    [UI_MENU_PRESENT] = "帧同步", [UI_MENU_PRESENT_DESC] = "VSync 等待显示器刷新。\n"
+                             "Mailbox 在支持时每次刷新显示最新的完整帧。\n"
+                             "Immediate 一准备好就输出帧，可能出现画面撕裂。",
+    [UI_MENU_PRESENT_MAILBOX] = "Mailbox", [UI_MENU_PRESENT_VSYNC] = "VSync", [UI_MENU_PRESENT_IMMEDIATE] = "Immediate",
+    [UI_MENU_PRESENT_IN_USE] = "正在使用：%s",
+    [UI_MENU_GPU] = "显卡", [UI_MENU_GPU_DESC] = "选择运行游戏的显卡。除非需要指定某块卡，否则用“自动”。",
+    [UI_MENU_GPU_AUTO] = "自动",
+    [UI_MENU_PERF_OVERLAY] = "性能悬浮窗",
+    [UI_MENU_PERF_OVERLAY_DESC] = "在右上角显示帧率。“完整”还会显示帧时间曲线和硬件统计。按 F10 循环切换模式。",
+    [UI_MENU_PERF_OFF] = "关", [UI_MENU_PERF_FPS] = "FPS", [UI_MENU_PERF_FULL] = "完整",
+    // printf format of the overlay line in FPS mode: the frame rate
+    [UI_PERF_LINE_FPS] = "%.0f fps",
+    [UI_MENU_RESOLUTION_GROUP] = "分辨率",
+    [UI_MENU_DISPLAY_OUTPUT] = "显示输出",
+    [UI_MENU_RENDER_OPTIONS] = "渲染选项",
+    [UI_MENU_OUTPUT_RES] = "渲染分辨率",
+    [UI_MENU_ULTRAWIDE] = "超宽屏",
+    [UI_MENU_ENABLE_ULTRAWIDE] = "启用超宽屏",
+    [UI_MENU_ULTRAWIDE_DESC] = "为 21:9 和 32:9 显示器加宽游戏画面。",
+    [UI_MENU_WIDE_RES] = "渲染分辨率",
+    [UI_MENU_WIDE_RES_DESC] = "设置游戏画面在缩放到显示器之前的尺寸。更高的分辨率更清晰，也更耗 GPU 和显存。\n\n"
+                             "要使用 21:9 和 32:9 选项，请先启用超宽屏。",
+    [UI_MENU_HUD_POSITION] = "HUD 位置",
+    [UI_MENU_HUD_POSITION_DESC] = "把角落的显示放在屏幕边缘，或保持在居中的 16:9 区域内。菜单和准星仍居中。",
+    [UI_MENU_HUD_EDGES] = "屏幕边缘", [UI_MENU_HUD_CENTERED] = "居中（16:9）",
+    [UI_MENU_WIDE_DISABLED] = "请先启用超宽屏",
+    [UI_MENU_OUTPUT_RES_DESC] = "游戏绘制画面和界面所用的尺寸。高于 1920 x 1080 时需要更多显存和 GPU 时间。更宽"
+                                "的尺寸（21:9）会扩大相机视野，并把 HUD 移到屏幕四角；更高的尺寸（16:10、Steam "
+                                "Deck）会把它移到上下边缘。",
+    [UI_MENU_RENDER_SCALE] = "3D 渲染比例",
+    [UI_MENU_RENDER_SCALE_DESC] = "3D 场景相对于游戏分辨率的尺寸；游戏的 FSR 会把它缩放到该尺寸。高于 100 % "
+                                  "可以平滑锯齿（超采样），但很耗 GPU。",
+    [UI_MENU_RENDER_SCALE_GAME] = "游戏原生（83 %）",
+    [UI_MENU_UPSCALER] = "放大方式",
+    [UI_MENU_UPSCALER_DESC] = "当游戏画面小于它在屏幕上或窗口中占据的区域时生效。AMD FSR 1 的边缘比双线性更锐利。",
+    [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "双线性",
+    [UI_MENU_ASPECT] = "显示缩放",
+    [UI_MENU_ASPECT_DESC] = "默认保持游戏的画面比例，需要时加黑边。\n"
+                            "“拉伸填满”使用整个窗口或屏幕；只有比例不同时画面才会被拉伸。",
+    [UI_MENU_ASPECT_FIT] = "默认", [UI_MENU_ASPECT_STRETCH] = "拉伸填满",
+    [UI_MENU_FOV] = "视野",
+    [UI_MENU_FOV_DESC] = "按原始角度的百分比调整相机视野。100% 使用游戏的默认视野。",
+    [UI_MENU_SHARPNESS] = "FSR 锐度",
+    [UI_MENU_SHARPNESS_DESC] = "FSR 缩放后的锐化；0 关闭。",
+    [UI_MENU_NO_UPSCALING] = "需要较小的游戏画面",
+    [UI_MENU_SHARPNESS_NEEDS_FSR] = "需要 AMD FSR 1",
+    [UI_MENU_SMAA] = "抗锯齿（SMAA）",
+    [UI_MENU_SMAA_DESC] = "平滑游戏画面和 HUD 中的锯齿。设置越高越耗 GPU 时间。",
+    [UI_MENU_SMAA_LOW] = "低", [UI_MENU_SMAA_MEDIUM] = "中", [UI_MENU_SMAA_HIGH] = "高",
+    [UI_MENU_COLOR] = "颜色",
+    [UI_MENU_COLOR_PRESET] = "色彩配置",
+    [UI_MENU_COLOR_PRESET_DESC] = "游戏默认使用原始色彩。\n鲜艳（OLED）提升对比度和色彩。\n"
+                                  "清晰让画面稍亮、更鲜明。\n\n"
+                                  "调整任意滑块都会把配置切换为“自定义”。",
+    [UI_MENU_COLOR_DEFAULT] = "游戏默认", [UI_MENU_COLOR_VIVID] = "鲜艳（OLED）",
+    [UI_MENU_COLOR_CLARITY] = "清晰",
+    [UI_MENU_COLOR_CUSTOM] = "自定义",
+    [UI_MENU_COLOR_BRIGHTNESS] = "亮度", [UI_MENU_COLOR_BRIGHTNESS_DESC] = "让画面更亮或更暗。默认 0%。",
+    [UI_MENU_COLOR_CONTRAST] = "对比度",
+    [UI_MENU_COLOR_CONTRAST_DESC] = "数值越高，暗部越暗、亮部越亮。默认 100%。",
+    [UI_MENU_COLOR_SATURATION] = "饱和度",
+    [UI_MENU_COLOR_SATURATION_DESC] = "数值越高色彩越鲜艳。默认 100%。",
+    [UI_MENU_COLOR_GAMMA] = "伽马",
+    [UI_MENU_COLOR_GAMMA_DESC] = "低于 1.00 提亮暗部和中调，高于 1.00 压暗它们。",
+    [UI_MENU_HDR_GROUP] = "HDR（实验性）",
+    [UI_MENU_HDR] = "HDR 输出",
+    [UI_MENU_HDR_DESC] = "在 HDR 显示器上提亮游戏 SDR 画面的高光。\n\n"
+                         "请先在系统显示设置里启用 HDR。",
+    [UI_MENU_HDR_NATIVE] = "游戏原生 HDR",
+    [UI_MENU_HDR_NATIVE_DESC] = "在 3.2.0 更新上使用游戏自带的 HDR。高光跟随峰值亮度，最高 1400 尼特。"
+                                "此模式会禁用 FSR 1、SMAA 和颜色调整。",
+    [UI_MENU_HDR_PEAK] = "峰值亮度",
+    [UI_MENU_HDR_PEAK_DESC] = "把最亮的高光设成显示器的峰值亮度（尼特）。",
+    [UI_MENU_HDR_GAME] = "游戏亮度",
+    [UI_MENU_HDR_GAME_DESC] = "设置游戏和 HUD 里普通白色的亮度。画面太暗时调高它。",
+    [UI_MENU_HDR_UI] = "设置菜单亮度",
+    [UI_MENU_HDR_UI_DESC] = "设置此设置菜单里白色的亮度。游戏 HUD 跟随游戏亮度。",
+
+    [UI_MENU_FRAME_RATE_GROUP] = "帧率",
+    [UI_MENU_FPS_LIMIT] = "帧率上限",
+    [UI_MENU_DKB_FPS_LIMIT_DESC] = "限制游戏的帧率。“显示器刷新率”使用显示器当前的刷新率。",
+    [UI_MENU_FPS_LIMIT_DESC] = "游戏每秒绘制的最大帧数。高于 60 属实验性，并且需要“游戏速度跟随时钟”。"
+                               "“不限”也是实验性的。",
+    [UI_MENU_FPS_30] = "30 FPS", [UI_MENU_FPS_40] = "40 FPS", [UI_MENU_FPS_45] = "45 FPS",
+    [UI_MENU_FPS_60] = "60 FPS", [UI_MENU_FPS_90] = "90 FPS", [UI_MENU_FPS_120] = "120 FPS",
+    [UI_MENU_FPS_144] = "144 FPS",
+    // the monitor's refresh rate; printf format with the rate in Hz when it is known
+    [UI_MENU_FPS_DISPLAY] = "显示器刷新率", [UI_MENU_FPS_DISPLAY_HZ] = "显示器刷新率（%.0f Hz）",
+    [UI_MENU_FPS_UNLIMITED] = "不限",
+    [UI_MENU_FPS_NEEDS_REALTIME] = "请启用“允许更高帧率”并重启",
+    [UI_MENU_REALTIME] = "游戏速度跟随时钟",
+    [UI_MENU_REALTIME_DESC] = "按真实时间推进游戏，这样慢帧不会让游戏变慢。",
+    [UI_MENU_DKB_REALTIME] = "允许更高帧率",
+    [UI_MENU_DKB_REALTIME_DESC] = "解锁帧率上限设置，包括高于 60 FPS 的帧率。游戏计时随帧率变化调整。"
+                                 "此模式为实验性。",
+    [UI_MENU_CLOTH_REALTIME] = "布料跟随时钟",
+    [UI_MENU_CLOTH_REALTIME_DESC] = "布料和头发也按真实时间推进。",
+    [UI_MENU_HIGHFPS_FIX] = "高帧率修正",
+    [UI_MENU_HIGHFPS_FIX_DESC] = "修正高于每秒 30 帧时出问题的物理，以及高于 60 帧时仍保持半透明或不可见的物体。",
+    [UI_MENU_GAME_LANG] = "游戏语言", [UI_MENU_GAME_LANG_DESC] = "游戏文本和语音的语言。",
+    [UI_MENU_GAME_LANG_AUTO] = "自动",
+    [UI_MENU_OPERATION_MODE] = "主机模式",
+    [UI_MENU_OPERATION_MODE_DESC] = "选择游戏使用的 Switch 模式。座上模式用电视配置，掌机模式用便携配置。",
+    [UI_MENU_MODE_DOCKED] = "座上模式", [UI_MENU_MODE_HANDHELD] = "掌机模式",
+    [UI_MENU_ASSUME_FOCUS] = "后台继续运行",
+    [UI_MENU_ASSUME_FOCUS_DESC] = "在你用其他窗口时让游戏继续运行。关闭后一切换出去就会暂停。\n\n"
+                                  "在加载过程中暂停可能导致加载无法完成。",
+
+    [UI_MENU_VOLUME] = "音量", [UI_MENU_VOLUME_DESC] = "调整游戏整体音量。设为 0% 即静音。",
+    [UI_MENU_AUDIO_CHANNELS] = "音频输出",
+    [UI_MENU_AUDIO_CHANNELS_DESC] = "选择立体声或 5.1 环绕声。“自动”在默认音频设备支持至少六声道时使用 5.1。",
+    [UI_MENU_CHANNELS_AUTO] = "自动", [UI_MENU_CHANNELS_STEREO] = "立体声",
+    [UI_MENU_CHANNELS_51] = "5.1 环绕声",
+
+    [UI_MENU_CONTROLLER] = "手柄", [UI_MENU_MOUSE_KEYBOARD] = "鼠标和键盘",
+    [UI_MENU_MOTION] = "体感操作", [UI_MENU_MOTION_DESC] = "用手柄的陀螺仪瞄准。",
+    [UI_MENU_RUMBLE_STRENGTH] = "震动强度",
+    [UI_MENU_RUMBLE_STRENGTH_DESC] = "手柄震动的强度。",
+    [UI_MENU_RUMBLE_CURVE] = "震动曲线",
+    [UI_MENU_RUMBLE_CURVE_DESC] = "数值越低，细微的震动越容易感觉到。",
+    [UI_MENU_RUMBLE_TRIGGERS] = "扳机震动（Xbox）",
+    [UI_MENU_RUMBLE_TRIGGERS_DESC] = "在支持的 Xbox 手柄上启用扳机震动。",
+    [UI_MENU_PAD_LAYOUT] = "按键布局",
+    [UI_MENU_PAD_LAYOUT_DESC] = "“自动”对任天堂风格手柄选 Nintendo，其他选 Xbox。\n"
+                                "Nintendo 用右侧按键作为 A。\nXbox 用下方按键作为 A。\n"
+                                "“Xbox 提示”用 Nintendo 的位置配 Xbox 标签。\n\n"
+                                "你重新映射过的按键，游戏仍显示原始提示。",
+    [UI_MENU_PAD_LAYOUT_AUTO] = "自动", [UI_MENU_PAD_LAYOUT_NINTENDO] = "Nintendo（A 在右）",
+    [UI_MENU_PAD_LAYOUT_XBOX] = "Xbox（A 在下）", [UI_MENU_PAD_LAYOUT_XBOX_PROMPTS] = "Xbox 提示（A 在右）",
+    [UI_MENU_PAD_LAYOUT_IN_USE] = "正在使用：%s",
+    [UI_MENU_PAD_LAYOUT_PROMPTS_MISSING] = "缺少提示文件：请重新运行安装程序",
+    [UI_MENU_PAD_LAYOUT_PROMPTS_RESTART] = "提示会在重启后改变",
+    [UI_MENU_STICK_DEADZONE] = "摇杆死区",
+    [UI_MENU_STICK_DEADZONE_DESC] = "设置摇杆要移动多远才被识别。角色或相机漂移时调高它。",
+    [UI_MENU_MOUSE_CAMERA] = "鼠标直接控制相机",
+    [UI_MENU_MOUSE_CAMERA_DESC] = "鼠标移动直接转动跟随相机。其他相机模式把鼠标移动当作摇杆输入。",
+    [UI_MENU_MOUSE_SENS] = "鼠标灵敏度",
+    [UI_MENU_MOUSE_SENS_DESC] = "设置移动鼠标时相机转动的幅度。",
+
+    [UI_BINDS_HELP_KEYS] = "点击一个绑定或按回车，然后按一个键或鼠标按钮。Delete 或 Backspace 清除它。"
+                           "已在使用中的键会移到新动作上。",
+    [UI_BINDS_HELP_PAD] = "在一个绑定上按 A，然后按一个手柄按钮。X 清除它。已在使用中的按钮会互换。"
+                          "左摇杆移动，右摇杆控制相机。",
+    [UI_BINDS_COL_KEY1] = "主键", [UI_BINDS_COL_KEY2] = "副键",
+    [UI_BINDS_GROUP_BUTTONS] = "按键", [UI_BINDS_GROUP_MOVE] = "移动", [UI_BINDS_GROUP_CAMERA] = "相机",
+    [UI_BINDS_PRESS_KEY] = "请为 %s 按一个键或鼠标按钮",
+    [UI_BINDS_PRESS_PAD] = "请为 %s 按一个手柄按钮",
+    [UI_BINDS_CANCEL_HINT] = "按 Esc 取消，或等待 %d 秒",
+    [UI_BINDS_TAKEN] = "%s 已从 %s 移走", [UI_BINDS_SWAPPED] = "%s 与 %s 互换",
+    [UI_BINDS_RESET] = "重置所有绑定",
+    [UI_BINDS_RESET_DESC] = "回到默认的键盘按键和手柄按钮。上面的按键布局会重新生效：重新映射过的手柄按钮"
+                            "会保留在原处，直到这次重置。",
+    [UI_BIND_A] = "A", [UI_BIND_B] = "B", [UI_BIND_X] = "X", [UI_BIND_Y] = "Y",
+    [UI_BIND_LCLICK] = "按下左摇杆", [UI_BIND_RCLICK] = "按下右摇杆", [UI_BIND_L] = "L",
+    [UI_BIND_R] = "R", [UI_BIND_ZL] = "ZL", [UI_BIND_ZR] = "ZR", [UI_BIND_PLUS] = "＋", [UI_BIND_MINUS] = "－",
+    [UI_BIND_LEFT] = "十字键左", [UI_BIND_UP] = "十字键上", [UI_BIND_RIGHT] = "十字键右",
+    [UI_BIND_DOWN] = "十字键下",
+    [UI_BIND_LSTICK_LEFT] = "左移", [UI_BIND_LSTICK_UP] = "前移", [UI_BIND_LSTICK_RIGHT] = "右移",
+    [UI_BIND_LSTICK_DOWN] = "后移",
+    [UI_BIND_RSTICK_LEFT] = "相机左转", [UI_BIND_RSTICK_UP] = "相机上看", [UI_BIND_RSTICK_RIGHT] = "相机右转",
+    [UI_BIND_RSTICK_DOWN] = "相机下看",
+    [UI_BIND_DESC_A] = "互动、拾取、对话。", [UI_BIND_DESC_B] = "奔跑、取消、返回。",
+    [UI_BIND_DESC_X] = "跳跃。", [UI_BIND_DESC_Y] = "攻击。", [UI_BIND_DESC_LCLICK] = "蹲下。",
+    [UI_BIND_DESC_RCLICK] = "第一人称视角。", [UI_BIND_DESC_L] = "能力。",
+    [UI_BIND_DESC_R] = "投掷武器。", [UI_BIND_DESC_ZL] = "盾牌、锁定。", [UI_BIND_DESC_ZR] = "弓箭。",
+    [UI_BIND_DESC_PLUS] = "菜单、物品栏。", [UI_BIND_DESC_MINUS] = "地图。",
+    [UI_BIND_DESC_DPAD] = "快速选择。",
+    [UI_BIND_DESC_MOVE] = "像左摇杆一样移动林克。手柄左摇杆始终可用。",
+    [UI_BIND_DESC_CAMERA] = "像右摇杆一样转动相机。鼠标和手柄右摇杆始终可用。",
+    [UI_DKB_BIND_A] = "跳跃。在菜单中确认选择。",
+    [UI_DKB_BIND_B] = "向下出拳。在菜单中返回。",
+    [UI_DKB_BIND_X] = "向上出拳。",
+    [UI_DKB_BIND_Y] = "向前出拳，或挥动你抱着的石块。",
+    [UI_DKB_BIND_LCLICK] = "执行《Bananza》操作设置里分配给摇杆按压的动作。",
+    [UI_DKB_BIND_RCLICK] = "执行《Bananza》操作设置里分配给右摇杆按压的动作。",
+    [UI_DKB_BIND_L] = "按住吹口哨，显示前往目标的路线。",
+    [UI_DKB_BIND_R] = "用“拍击”收集附近物品并找出隐藏物体。",
+    [UI_DKB_BIND_ZL] = "向前翻滚；抱着石块时使出“冲刺滑行”。",
+    [UI_DKB_BIND_ZR] = "抓起一块地形，或扔出你抱着的石块。",
+    [UI_DKB_BIND_PLUS] = "打开暂停菜单。",
+    [UI_DKB_BIND_MINUS] = "打开地图。",
+    [UI_DKB_BIND_LEFT] = "切换到上一个已解锁的 Bananza 形态。",
+    [UI_DKB_BIND_UP] = "打开技能菜单。",
+    [UI_DKB_BIND_RIGHT] = "切换到下一个已解锁的 Bananza 形态。",
+    [UI_DKB_BIND_DOWN] = "可用时打开拍照模式。",
+    [UI_DKB_BIND_MOVE] = "向该方向移动大金刚。",
+    [UI_DKB_BIND_CAMERA] = "向该方向转动相机。",
+    [UI_KEY_SPACE] = "空格", [UI_KEY_TAB] = "Tab", [UI_KEY_LSHIFT] = "左 Shift", [UI_KEY_LCTRL] = "左 Ctrl",
+    [UI_KEY_UP] = "上方向键", [UI_KEY_DOWN] = "下方向键", [UI_KEY_LEFT] = "左方向键",
+    [UI_KEY_RIGHT] = "右方向键",
+    [UI_KEY_MOUSE_L] = "鼠标左键", [UI_KEY_MOUSE_R] = "鼠标右键", [UI_KEY_MOUSE_M] = "鼠标中键",
+    [UI_KEY_MOUSE_X1] = "鼠标 4", [UI_KEY_MOUSE_X2] = "鼠标 5",
+    [UI_KEY_ENTER] = "回车", [UI_KEY_BACKSPACE] = "退格", [UI_KEY_RSHIFT] = "右 Shift",
+    [UI_KEY_RCTRL] = "右 Ctrl", [UI_KEY_LALT] = "Alt", [UI_KEY_CAPSLOCK] = "大写锁定",
+    [UI_KEY_INSERT] = "Insert", [UI_KEY_DELETE] = "Delete", [UI_KEY_HOME] = "Home", [UI_KEY_END] = "End",
+    [UI_KEY_PAGEUP] = "Page Up", [UI_KEY_PAGEDOWN] = "Page Down", [UI_KEY_NUM_FMT] = "数字键 %s",
+    [UI_PAD_SOUTH] = "下方按钮", [UI_PAD_EAST] = "右侧按钮", [UI_PAD_WEST] = "左侧按钮",
+    [UI_PAD_NORTH] = "上方按钮", [UI_PAD_LSTICK] = "左摇杆", [UI_PAD_RSTICK] = "右摇杆",
+    [UI_PAD_L] = "左肩键", [UI_PAD_R] = "右肩键", [UI_PAD_START] = "Start", [UI_PAD_BACK] = "Back",
+    [UI_PAD_DPAD_LEFT] = "十字键左", [UI_PAD_DPAD_UP] = "十字键上", [UI_PAD_DPAD_RIGHT] = "十字键右",
+    [UI_PAD_DPAD_DOWN] = "十字键下", [UI_PAD_ZL] = "左扳机", [UI_PAD_ZR] = "右扳机",
+    [UI_PAD_LPADDLE1] = "左背键", [UI_PAD_RPADDLE1] = "右背键",
+    [UI_PAD_LPADDLE2] = "左背键 2", [UI_PAD_RPADDLE2] = "右背键 2",
+    [UI_PAD_CROSS] = "Cross", [UI_PAD_CIRCLE] = "Circle", [UI_PAD_SQUARE] = "Square", [UI_PAD_TRIANGLE] = "Triangle",
+
+    [UI_MENU_MENU_LANG] = "设置语言", [UI_MENU_MENU_LANG_DESC] = "设置设置菜单和性能悬浮窗的语言。"
+                             "“跟随系统”在系统语言为中文时用中文，俄语时用俄语，其他情况用英文。",
+    [UI_MENU_MENU_LANG_AUTO] = "跟随系统",
+    [UI_MENU_THEME] = "菜单主题", [UI_MENU_THEME_DK] = "大金刚", [UI_MENU_THEME_CLASSIC] = "经典",
+    [UI_MENU_THEME_DESC] = "选择大金刚主题，或经典的绿色与金色主题。",
+
+    [UI_MENU_ADV_WARNING] = "这些设置用于测试和排查问题。只有在明白原因时才改动它们。",
+    [UI_MENU_GROUP_SCHED] = "调度", [UI_MENU_GROUP_SHADERS] = "着色器与管线",
+    [UI_MENU_GROUP_TEXMEM] = "纹理与内存", [UI_MENU_GROUP_FIXES] = "渲染修正",
+    [UI_MENU_GROUP_VULKAN] = "Vulkan", [UI_MENU_GROUP_DIAG] = "诊断",
+    [UI_MENU_ASYNC_PREEMPT] = "虚拟核心抢占",
+    [UI_MENU_ASYNC_PREEMPT_DESC] = "允许同一虚拟核心上的一个游戏线程打断另一个线程。",
+    [UI_MENU_PREEMPT_OFF] = "关", [UI_MENU_PREEMPT_ON] = "开", [UI_MENU_PREEMPT_INHERIT] = "仅继承",
+    [UI_MENU_REPLAY_ASYNC] = "GPU 帧准备放到独立线程",
+    [UI_MENU_REPLAY_ASYNC_DESC] = "在独立线程上为 GPU 准备帧，而不是在游戏线程上。最多增加一帧延迟。",
+    [UI_MENU_REPLAY_THREADS] = "录制大型渲染通道的线程数",
+    [UI_MENU_REPLAY_THREADS_DESC] = "同时用这么多线程录制大型渲染通道的绘制。在 8 个或更多逻辑处理器上"
+                                    "“自动”使用 4 个线程（AMD 上不用）；“关”用一个线程录制。核心多的 CPU "
+                                    "在繁忙区域会更快。",
+    [UI_MENU_TIMER_1MS] = "1 毫秒 Windows 计时器",
+    [UI_MENU_TIMER_1MS_DESC] = "把系统计时器精度提高到 1 毫秒，让帧节奏更稳定。",
+    [UI_MENU_PIPE_WAIT] = "等待型绘制的处理",
+    [UI_MENU_PIPE_WAIT_DESC] = "“默认”保留当前调度，为等待型绘制预留一个工作线程；“旧（绘制）”使用之前的调度。",
+    [UI_MENU_PIPE_WAIT_DEFAULT] = "默认", [UI_MENU_PIPE_WAIT_DRAW] = "旧（绘制）",
+    [UI_MENU_PIPE_SKIP] = "管线构建时跳过的绘制",
+    [UI_MENU_PIPE_SKIP_DESC] = "哪些绘制被丢弃，而不是等它的管线建好。",
+    [UI_MENU_PIPE_SKIP_STRICT] = "严格", [UI_MENU_PIPE_SKIP_ANY] = "任意",
+    [UI_MENU_PIPE_SKIP_FULLSCREEN] = "全屏通道",
+    [UI_MENU_LIB_PREBUILD] = "阶段库预构建",
+    [UI_MENU_LIB_PREBUILD_DESC] = "在后台提前构建着色器阶段库。",
+    [UI_MENU_LIB_PREBUILD_THREADS] = "阶段库预构建线程数",
+    [UI_MENU_LIB_PREBUILD_THREADS_DESC] = "预构建使用的线程数；“自动”根据你的 CPU 选择。",
+    [UI_MENU_PIPE_PREBUILD] = "管线预构建",
+    [UI_MENU_PIPE_PREBUILD_DESC] = "提前构建已知的管线。",
+    [UI_MENU_PREWARM_XLATE] = "翻译器预热",
+    [UI_MENU_PREWARM_XLATE_DESC] = "启动时翻译已知着色器的线程数；“自动”取 CPU 线程数的一半，最多 16。",
+    [UI_MENU_GPL] = "图形管线库",
+    [UI_MENU_GPL_DESC] = "使用 Vulkan 管线库扩展；驱动因此出问题时就关掉。",
+    [UI_MENU_ASTC] = "ASTC 纹理解码", [UI_MENU_ASTC_DESC] = "压缩的 ASTC 纹理在哪里解码。",
+    [UI_MENU_ASTC_AUTO] = "自动", [UI_MENU_ASTC_GPU] = "GPU 着色器", [UI_MENU_ASTC_NATIVE] = "原生",
+    [UI_MENU_ASTC_CPU] = "CPU",
+    [UI_MENU_MEMORY] = "GPU 内存模式", [UI_MENU_MEMORY_DESC] = "游戏内存如何与 GPU 共享。",
+    [UI_MENU_MEMORY_AUTO] = "自动", [UI_MENU_MEMORY_IMPORT] = "导入", [UI_MENU_MEMORY_MIRROR] = "镜像",
+    [UI_MENU_MEMORY_VERIFY] = "校验",
+    [UI_MENU_TEX_ALIAS] = "纹理别名", [UI_MENU_TEX_ALIAS_DESC] = "在已有纹理的内存上创建新纹理时，以该内容"
+                            "开始，而不是空白。",
+    [UI_MENU_TEX_VRAM_PRESSURE] = "纹理内存上限", [UI_MENU_TEX_VRAM_PRESSURE_DESC] = "超过此百分比显存后，游戏"
+                                    "已释放的纹理会丢弃（再次使用时从存储里取回）。0 表示保留。",
+    [UI_MENU_ASTC_BC] = "把 ASTC 压缩为 BC3", [UI_MENU_ASTC_BC_DESC] = "配合 GPU 解码器：把解码后的 ASTC 纹理"
+                          "重新编码为 BC3，只占四分之一显存。适用于 4 GB 及以下的显卡；纹理会略显方块化。",
+    [UI_MENU_LOD_GUARD] = "LOD 保护", [UI_MENU_LOD_GUARD_DESC] = "在 GPU 读取之前等待游戏改完细节层级数据，避免"
+                            "物体在一帧内闪到错误位置，或远景变成一片平坦。",
+    [UI_MENU_FIX_C0] = "常量缓冲修正",
+    [UI_MENU_FIX_C0_DESC] = "填充驱动保留的常量 bank c0（存储大小、dispatch 大小、点大小、基础实例），"
+                            "而不是读取零值。",
+    [UI_MENU_FIX_ZERO] = "清零新的 GPU 内存",
+    [UI_MENU_FIX_ZERO_DESC] = "新的 GPU 内存池以零填充开始，与 Switch 内存一致。",
+    [UI_MENU_LIST_RESTART] = "列表图元重启",
+    [UI_MENU_LIST_RESTART_DESC] = "按 Switch 的做法，对三角形列表绘制应用游戏的图元重启。没有它，重启索引"
+                                  "会被当成顶点绘制，出现长条拉伸三角形（例如地图上）。需要支持 "
+                                  "primitiveTopologyListRestart 的 GPU。",
+    [UI_MENU_BIND_SKIP] = "跳过重复绑定",
+    [UI_MENU_BIND_SKIP_DESC] = "优化：跳过没有变化的绑定。",
+    [UI_MENU_SHADER_MEMO] = "着色器备忘", [UI_MENU_SHADER_MEMO_DESC] = "优化：记住着色器查找结果。",
+    [UI_MENU_PIPE_MEMO] = "管线备忘", [UI_MENU_PIPE_MEMO_DESC] = "优化：状态重复时复用上一次绘制的管线。",
+    [UI_MENU_TEX_MEMO] = "纹理绑定备忘", [UI_MENU_TEX_MEMO_DESC] = "优化：在绘制之间记住纹理描述符。",
+    [UI_MENU_DESC_TEMPLATE] = "描述符模板",
+    [UI_MENU_DESC_TEMPLATE_DESC] = "优化：批量更新描述符。",
+    [UI_MENU_PUSH_SKIP] = "跳过重复推送常量",
+    [UI_MENU_PUSH_SKIP_DESC] = "优化：跳过没有变化的推送常量。",
+    [UI_MENU_SPLIT_DRAWS] = "提前提交 GPU",
+    [UI_MENU_SPLIT_DRAWS_DESC] = "把 GPU 工作按每 N 个绘制分批、在通道之间提前提交，让 GPU 更早开始；0 关闭。",
+    [UI_MENU_VK_VALIDATION] = "校验层",
+    [UI_MENU_VK_VALIDATION_DESC] = "检查每一个 Vulkan 调用，会让游戏慢很多。",
+    [UI_MENU_VK_VALIDATION_MISSING] = "没有安装校验层。",
+    [UI_MENU_VK_DYN_VERTEX] = "动态顶点状态",
+    [UI_MENU_VK_DYN_VERTEX_DESC] = "强制开关动态顶点输入；默认值取决于显卡。",
+    [UI_MENU_VK_DYN_A2C] = "动态 Alpha to Coverage",
+    [UI_MENU_VK_DYN_A2C_DESC] = "强制开关动态 alpha to coverage。在 AMD 驱动上，RDNA 2 及更早的卡默认关闭"
+                                "（开启会把角色画成黑色），其他情况默认开启。",
+    [UI_MENU_VK_SUBGROUP_PIN] = "固定子组大小", [UI_MENU_VK_SUBGROUP_PIN_DESC] = "固定着色器子组大小。",
+    [UI_MENU_TRACE] = "性能日志", [UI_MENU_TRACE_DESC] = "把帧时间写入文件。",
+    [UI_MENU_FLIGHT] = "飞行记录器",
+    [UI_MENU_FLIGHT_DESC] = "保留一段短历史，在某一帧卡死时保存下来。",
+    [UI_MENU_FLIGHT_SPIKE_MS] = "卡死阈值（毫秒）",
+    [UI_MENU_FLIGHT_SPIKE_MS_DESC] = "算作卡死的帧时间。",
+    [UI_MENU_INPUT_RECORD] = "输入录制",
+    [UI_MENU_INPUT_RECORD_DESC] = "把你的输入写入文件，用于报告问题。",
+    [UI_MENU_OPEN_LOG] = "打开日志文件夹", [UI_MENU_OPEN_LOG_DESC] = "显示存放日志文件的文件夹。",
+    [UI_MENU_COPY_INFO] = "复制系统信息",
+    [UI_MENU_COPY_INFO_DESC] = "把 GPU、驱动、CPU、内存和改动过的设置复制到剪贴板。",
+    [UI_MENU_COPY_INFO_DONE] = "已复制", [UI_MENU_ACTION_FAILED] = "没有成功",
+    [UI_MENU_RESET] = "把所有设置重置为默认", [UI_MENU_RESET_DESC] = "对所有标签页生效。",
+    [UI_MENU_RESET_CONFIRM] = "要把每个设置都重置为默认吗？", [UI_MENU_RESET_YES] = "重置",
+    [UI_MENU_RESET_NO] = "取消",
+
+    [UI_MENU_OV_FPS] = "%.0f FPS", [UI_MENU_OV_FRAME_MS] = "%.1f 毫秒", [UI_MENU_OV_GAME_PCT] = "游戏 %.0f%%",
+    [UI_MENU_OV_MAX_MS] = "最大 %.1f 毫秒",
+    [UI_MENU_OV_GPU] = "GPU", [UI_MENU_OV_CPU] = "CPU", [UI_MENU_OV_RAM] = "内存", [UI_MENU_OV_VRAM] = "显存",
+    [UI_MENU_OV_TEMP] = "温度", [UI_MENU_OV_POWER] = "功耗", [UI_MENU_OV_CLOCK] = "频率",
+    [UI_MENU_OV_NONE] = "-",
+    [UI_MENU_OV_REPLAY] = "GPU 帧准备", [UI_MENU_OV_GPU_TIME] = "每帧 GPU 占用",
+    [UI_MENU_OV_PIPE_WAIT] = "管线等待",
+    [UI_MENU_OV_SHADER_WAIT] = "着色器等待", [UI_MENU_OV_TEX_UPLOADS] = "纹理上传",
+    [UI_MENU_OV_FMT_PCT] = "%.0f%%", [UI_MENU_OV_FMT_TEMP] = "%.0f °C", [UI_MENU_OV_FMT_POWER] = "%.0f W",
+    [UI_MENU_OV_FMT_MHZ] = "%.0f MHz", [UI_MENU_OV_FMT_GB] = "%.1f GB", [UI_MENU_OV_FMT_GB_OF] = "/ %.1f GB",
+    [UI_MENU_OV_GAME_GB] = "游戏 %.1f GB", [UI_MENU_OV_FMT_MS] = "%.2f 毫秒",
+    [UI_MENU_OV_PER_FRAME] = "每帧 %.1f",
+    [UI_MENU_OV_WINDOW] = "窗口", [UI_MENU_OV_OUTPUT] = "游戏画面", [UI_MENU_OV_SCENE] = "3D 场景",
+    [UI_MENU_OV_SCALING] = "缩放", [UI_MENU_OV_LIMIT] = "帧率上限", [UI_MENU_OV_PRESENT] = "输出方式",
+    [UI_MENU_OV_FMT_SIZE] = "%ux%u", [UI_MENU_OV_FMT_SCENE] = "%ux%u，%.0f%%",
+    [UI_MENU_OV_FMT_UPSCALE] = "%ux%u -> %ux%u",
+    [UI_MENU_OV_NO_UPSCALER] = "无放大",
+    [UI_MENU_OV_FMT_FSR] = "AMD FSR 1，锐度 %d%%", [UI_MENU_OV_SCALE_NONE] = "无（1:1）",
+    [UI_MENU_OV_SCALE_BILINEAR] = "双线性",
+};
 SWKBD_ONLY(text_zh_hant, "文字輸入", "請輸入名字", "馬兒", "確定", "取消", "手把：A 確定，B 取消");
 SWKBD_ONLY(text_ko, "문자 입력", "이름을 입력하세요", "말", "확인", "취소", "컨트롤러: A 확인, B 취소");
 
@@ -755,14 +1099,18 @@ const char *ui_text_in(const char *lang, UiTextId id) {
 
 const char *ui_text(UiTextId id) { return ui_text_in(ui_text_lang(ov_language()), id); }
 
-// The menu language, re-read when cfg_version changes. TOTK_MENU_LANG "ru" or "en"; anything else (unset included)
-// follows the system UI language: Russian for "ru", "ru-RU", ..., else English.
+// The menu language, re-read when cfg_version changes. TOTK_MENU_LANG "ru", "en" or "zh-Hans"; anything else (unset
+// included) follows the system UI language: Russian for "ru", "ru-RU", ..., the menu's Simplified Chinese for "zh",
+// "zh-CN", ..., else English.
 static const char *resolve_menu_lang(void) {
     const char *v = cfg_value("TOTK_MENU_LANG");
     if (v && !strcmp(v, "ru")) return "ru";
     if (v && !strcmp(v, "en")) return "en";
+    if (v && !strcmp(v, "zh-Hans")) return "zh-Hans";
     const char *sys = plat_ui_language();
-    return sys && (!strcmp(sys, "ru") || !strncmp(sys, "ru-", 3)) ? "ru" : "en";
+    if (sys && (!strcmp(sys, "ru") || !strncmp(sys, "ru-", 3))) return "ru";
+    if (sys && (!strcmp(sys, "zh") || !strncmp(sys, "zh-", 3))) return "zh-Hans";   // zh-TW and zh-HK read the same row
+    return "en";
 }
 
 const char *menu_text(UiTextId id) {
