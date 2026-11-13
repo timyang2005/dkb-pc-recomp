@@ -49,8 +49,8 @@ class UpdateTest(unittest.TestCase):
             self.assertFalse(update.disabled())
             self.assertTrue(update.disabled(True))
 
-    def test_text_in_both_languages(self):
-        for lang in ('en', 'ru'):
+    def test_text_in_each_language(self):
+        for lang in ('en', 'ru', 'zh'):
             text = json.loads((ROOT / 'installer' / 'text' / f'{lang}.json').read_text(encoding='utf-8'))
             self.assertIn('{tag}', text['ui.update_available'])
             self.assertIn('{url}', text['warn.update_available'])

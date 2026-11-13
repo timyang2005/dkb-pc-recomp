@@ -2,10 +2,10 @@
 
 A front end over the CLI (docs/installer.md): it collects the game files, the keys file path, the game language and the
 install folder, runs `python -m installer ...` as a subprocess and shows its JSON events. Decisions live in guilogic.py;
-this file only draws. The window text is in installer/text/<en|ru>.json under "ui.*" and "launcher.*" ids.
+this file only draws. The window text is in installer/text/<en|ru|zh>.json under "ui.*" and "launcher.*" ids.
 
-    --selftest [--shots DIR]   build every screen in both languages and close by itself (PNG per screen with --shots)
-    --lang en|ru               window language (default: the Windows display language)
+    --selftest [--shots DIR]   build every screen in every language and close by itself (PNG per screen with --shots)
+    --lang en|ru|zh            window language (default: the Windows display language)
 """
 import argparse
 import json
@@ -16,7 +16,7 @@ import threading
 import tkinter as tk
 import webbrowser
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 try:
     from PIL import ImageGrab   # only the screenshots of --selftest --shots need it; the release has no PIL
@@ -40,6 +40,20 @@ RED, RED_TEXT, GREEN, GREEN_TEXT = '#c8281e', '#ff8a7a', '#3f8f3a', '#6fcf68'
 BRAND = 'DONKEY KONG BANANZA  ·  PC RECOMP'
 COLOR = {PENDING: MUTED, RUNNING: BANANA, DONE: GREEN_TEXT, SKIPPED: MUTED, FAILED: RED_TEXT}
 PAD = 14
+
+
+def pick_fonts(root, ui_lang):
+    """(window font, log font). The Chinese window takes a CJK family the system actually has, because the stock fonts
+    leave the glyphs to font linking; its log keeps that family too, since the log lines are the window's Chinese text
+    and Consolas has no Chinese glyphs. Elsewhere Segoe UI / DejaVu Sans as before."""
+    ui, mono = ('Segoe UI', 'Consolas') if os.name == 'nt' else ('DejaVu Sans', 'DejaVu Sans Mono')
+    if ui_lang == 'zh':
+        families = set(tkfont.families(root))
+        for name in ('Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans SC',
+                     'WenQuanYi Micro Hei'):
+            if name in families:
+                return name, name
+    return ui, mono
 
 
 def apply_theme(root, ui_font):
@@ -159,8 +173,7 @@ class App:
             self.icon = tk.PhotoImage(file=str(png))
             root.iconphoto(True, self.icon)
         root.protocol('WM_DELETE_WINDOW', self.on_close)
-        self.ui_font = 'Segoe UI' if os.name == 'nt' else 'DejaVu Sans'
-        self.mono_font = 'Consolas' if os.name == 'nt' else 'DejaVu Sans Mono'
+        self.ui_font, self.mono_font = pick_fonts(root, self.cat.lang)
         apply_theme(root, self.ui_font)
 
         top = ttk.Frame(root, style='Header.TFrame', padding=(PAD, 10, PAD, 10))

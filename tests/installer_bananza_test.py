@@ -812,11 +812,13 @@ a=sys.argv; out=pathlib.Path(a[a.index('--out')+1]); out.mkdir(parents=True)
 
     def test_catalogs_cover_same_messages_and_placeholders(self):
         import re
-        english, russian = Catalog('en').english, Catalog('ru').texts
-        self.assertEqual(set(english), set(russian))
-        for key in english:
-            self.assertEqual(sorted(re.findall(r'\{\w+\}', english[key])),
-                             sorted(re.findall(r'\{\w+\}', russian[key])), key)
+        english = Catalog('en').english
+        for lang in ('ru', 'zh'):
+            texts = Catalog(lang).texts
+            self.assertEqual(set(english), set(texts), lang)
+            for key in english:
+                self.assertEqual(sorted(re.findall(r'\{\w+\}', english[key])),
+                                 sorted(re.findall(r'\{\w+\}', texts[key])), (lang, key))
 
 
 if __name__ == '__main__':
