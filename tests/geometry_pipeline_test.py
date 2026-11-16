@@ -34,7 +34,7 @@ def shader_adapter():
     start = source.index('enum { OP_ENTRY_POINT')
     enum = source[start:source.index('};', start) + 2]
     names = ['static void reflect_spirv(', 'const uint32_t *gfx_shader_spirv(',
-             'int gfx_shader_stage(', 'const GfxShaderGeometry *gfx_shader_geometry(',
+             'int gfx_shader_stage(', 'int gfx_shader_is_variant(', 'const GfxShaderGeometry *gfx_shader_geometry(',
              'int gfx_shader_resources(', 'uint32_t gfx_shader_inputs(',
              'uint32_t gfx_shader_outputs(', 'const uint8_t *gfx_shader_input_id(']
     return '\n'.join([struct, enum] + [interface.function(source, name) for name in names])
@@ -78,8 +78,9 @@ def pipeline_source():
     prefix += '''
 static void vertex_input(const VkPipeState *s,VtxInput *v) { (void)s;(void)v;abort(); }
 static uint32_t vs_outs(const GfxShader *v,const GfxShader *f,GfxShaderIo io[32]) {(void)v;(void)f;(void)io;abort();}
-// gfx_spirv_final's optional rewrites (screen UV, FMZ, HDR shoulder, NaN guard, dump, override) are off here: this fixture
-// checks the geometry-chain module path only.
+// gfx_spirv_final's optional rewrites (light-quad fold, screen UV, FMZ, HDR shoulder, NaN guard, dump, override) are off
+// here: this fixture checks the geometry-chain module path only.
+static uint32_t *lq_fold(const GfxShader *src,const uint32_t *w,uint64_t words,uint64_t *out_n) {(void)src;(void)w;(void)words;(void)out_n;return NULL;}
 VkPipelineCreateFlags vk_pipeline_capture_flags(void) {return 0;}
 static int screen_uv_stage(const GfxShader *src) {(void)src;return 0;}
 uint32_t *spirv_screen_uv(const uint32_t *w,uint64_t n,uint64_t *out_n);

@@ -61,6 +61,7 @@ typedef struct {
     VkShaderStageFlags sg_pin_stages;  // 0: no pin, stages run at the device's subgroupSize
     int gpl;                           // VK_EXT_graphics_pipeline_library enabled with fast linking (TOTK_GPL=0: off)
     int amd;                           // an AMD GPU (vendor 0x1002), any driver
+    int intel;                         // an Intel GPU (vendor 0x8086), any driver
     int amd_sc;                        // AMD's Windows driver branch for RDNA 1 and 2 ("AMD proprietary shader compiler")
     int moltenvk;                      // the driver is MoltenVK (VK_DRIVER_ID_MOLTENVK)
     int radv;                          // Mesa's RADV (VK_DRIVER_ID_MESA_RADV)
@@ -281,6 +282,8 @@ void vk_mem_pick(VkMemSpan *sp);
 #define VK_MEM_USE(sp) do { if (vk_mirror_on && (sp).pool) vk_mem_use(&(sp)); } while (0)
 #define VK_MEM_PICK(sp) do { if (vk_mirror_on && (sp).pool) vk_mem_pick(&(sp)); } while (0)
 void vk_mem_gpu_wrote(const VkMemSpan *sp, uint64_t size);
+int vk_mem_gpu_kept(const VkMemSpan *sp, uint64_t size);    // as vk_mem_gpu_wrote, but whole pages stay in the mirror; 0: none did
+int vk_mem_kept_overlaps(uint64_t addr, uint64_t size);     // a kept GPU write lies in the range
 uint64_t vk_mem_mirror_gen(void);   // changes whenever a mirror is made or dropped, and with every submission
 int vk_mem_shadow_on(void);         // shadow storage is in use (TOTK_SHADOW)
 void vk_mem_threads(void);         // the workers of sliced passes bind mirrors too (vk_exec.c), from now on
@@ -293,7 +296,12 @@ void vk_usnap_begin(const uint64_t *handles, int n, uint64_t fence);
 void vk_usnap_end(uint64_t fence);
 int vk_usnap_find(uint64_t addr, uint64_t n, uint64_t align, VkDescriptorBufferInfo *out);
 void vk_usnap_quiet(int on);   // the calling thread's finds are not counted while on (slices of a parallel pass)
+// The number of drops made so far, and, on a recording thread, the drops its lookups follow: those numbered below upto
+// (vk_usnap_drops() + 1 at a pass's start), 0 all.
+uint64_t vk_usnap_drops(void);
+void vk_usnap_view(uint64_t upto);
 const void *vk_usnap_bytes(uint64_t addr, uint64_t n);   // the copy's bytes for the CPU; NULL: not copied or dropped
+void vk_usnap_cpu_reads(void);   // vk_usnap_bytes is read often: keep each copy in cached host memory too
 int vk_usnap_covers(uint64_t addr, uint64_t n);   // a copy of this submission overlaps the range
 void vk_usnap_drop(uint64_t addr, uint64_t n);   // the replay makes the GPU write [addr, addr+n) of guest memory
 uint64_t vk_usnap_arena_bytes(void);                 // arenas created so far (all kept until shutdown)
@@ -309,6 +317,9 @@ void vk_mem_mirror_prologue(VkCommandBuffer cb);
 void vk_mem_shadow_sync(void);
 void vk_mem_gpu_pending(uint64_t addr, uint64_t size);
 void vk_gpu_written(uint64_t addr, uint64_t size);
+// As vk_gpu_written for a write into buffer buf (VK_NULL_HANDLE: unknown). When buf is the VRAM mirror of the range's
+// pool, the mirror's next sync does not copy the pages in again while that write is their newest.
+void vk_gpu_written_into(uint64_t addr, uint64_t size, VkBuffer buf);
 int vk_mem_mirror_probe(uint64_t addr);   // --probe-vkexec: the pool at addr gets its mirror as on a first buffer use;
                                           // 1 when it has one
 void vk_mem_class_log(const VkPhysicalDeviceProperties *p, const VkPhysicalDeviceMemoryProperties *m);   // once
@@ -424,6 +435,10 @@ typedef struct {
 // read it before the store is dropped: the store is followed by vk_spec_world_changed.
 static inline int vk_tex_fb_learned(const VkTexImage *img) { return __atomic_load_n(&img->fb_learned, __ATOMIC_ACQUIRE); }
 static inline void vk_tex_fb_learn(VkTexImage *img) { __atomic_store_n(&img->fb_learned, 1, __ATOMIC_RELEASE); }
+// The walk with a pass end held back (vk_exec.c par_defer) waits here for the held slices before it changes something
+// they read outside the texture cache's own calls (a learned feedback target, a new mirror); a texture lock it holds
+// is let go for the wait (vk_texture.c hold_barrier). Any other thread, or no held slice left: returns at once.
+void vk_texture_hold_barrier(void);
 const VkTexImage *vk_texture_get(const tex_t *t);   // created and made current; NULL for BUFFER or unmapped formats
 // A texture slot; a slot whose texture was finalized follows the live texture at the same storage (hle_nvn.c).
 const VkTexImage *vk_texture_by_id(const dpool_ref *pool, int id, view_t *view, int *has_view);
@@ -465,7 +480,7 @@ int vk_texture_read_image(const tex_t *t, const view_t *v, const NVNcopyRegion *
 int vk_texture_cpu_stale(uint64_t addr, uint64_t size);    // a GPU-written mirrored texture there has stale storage
 uint64_t vk_texture_dirty_fence(uint64_t addr, uint64_t size);   // newest recorded writer of such a texture; 0: none
 void vk_texture_write_back(uint64_t addr, uint64_t size);   // writes those images back into their storage (waits)
-// The replay's deferred-read write-back (TOTK_WB_ASYNC, default off): copies recorded and submitted without waiting,
+// The replay's deferred-read write-back (TOTK_WB_ASYNC, default on): copies recorded and submitted without waiting,
 // written to the storage by a later vk_texture_wb_poll once they completed. TOTK_WB_ASYNC=0: vk_texture_write_back.
 void vk_texture_write_back_async(uint64_t addr, uint64_t size);
 void vk_texture_wb_poll(void);                      // finishes the asynchronous write-backs whose copies completed
@@ -492,7 +507,41 @@ int vk_dlss_wanted(void);
 int vk_dlss_instance_exts(const char **out, int max);
 int vk_dlss_device_exts(const char **out, int max);
 int vk_dlss_record(VkCommandBuffer cb, uint64_t fence, const VkTexImage *in, const VkTexImage *out);
+int vk_dlss_warm(VkCommandBuffer cb, uint64_t fence);   // once, at the first compute dispatch: NGX and the model
+                                                      // load; 1 when it recorded into cb (rebind after it)
 void vk_dlss_release(void);   // device idle, before it goes away
+
+// The inputs both temporal upscalers take, DLSS above and FSR 3.1 below (vk_dlss.c): the scene's jitter, depth and camera
+// motion vectors, made from what the replay noted at the scene's draws. vk_temporal_inputs fills t for one frame of
+// inputs w x h upscaled to ow x oh and records the vector pass into cb; fresh: the upscaler has no history. 1 = filled
+// in, 0 = the vector image could not be made. temporal: a scene was noted at the input size (otherwise no depth, zero
+// vectors, reset). reset: the history is not to be used. depth is a sampled view in GENERAL; mv holds the motion in
+// render pixels (previous position minus this one, jitter taken off); proj is the scene's projection, row-major, as the
+// game fills it. vk_temporal_done after the evaluation moves the jitter and the camera on to the next frame.
+typedef struct {
+    int temporal, reset;
+    float jx, jy;                 // pixels, the viewport offset the scene was drawn with
+    uint32_t phases;              // the jitter sequence's length
+    VkImageView depth, mv;
+    VkImage depth_image;
+    VkFormat depth_format;
+    uint32_t depth_level, depth_layer;
+    float proj[16];
+    double vp[16];                // for vk_temporal_done
+} VkTemporalIn;
+int vk_temporal_inputs(VkCommandBuffer cb, uint32_t w, uint32_t h, uint32_t ow, uint32_t oh, int fresh, VkTemporalIn *t);
+void vk_temporal_done(const VkTemporalIn *t, uint32_t w, uint32_t h, uint32_t ow);
+
+// FSR 3.1 in place of the game's upscaler (vk_fsr3.c, upscaler = fsr3), over the inputs above. vk_fsr3_wanted: the
+// setting asks for it (read once a frame) and nothing has failed. vk_fsr3_record is vk_dlss_record's counterpart with
+// the same results: 1 = recorded (the caller forgets the bound state and puts a full barrier after it), 0 = nothing
+// recorded, the game's upscaler runs (no scene at the input size, an unsupported size or GPU), -1 = it failed after
+// recording some of its work. vk_fsr3_release: device idle, before it goes away (logs the summary).
+int vk_fsr3_wanted(void);
+int vk_fsr3_record(VkCommandBuffer cb, uint64_t fence, const VkTexImage *in, const VkTexImage *out);
+void vk_fsr3_release(void);
+// Either temporal upscaler is chosen: the scene's draws are jittered and noted for it.
+static inline int vk_temporal_wanted(void) { return vk_dlss_wanted() || vk_fsr3_wanted(); }
 
 // ---- submission, synchronisation, completion (vk_sync.c, vk_backend.c)
 // Fence values are ctx->timeline values: each submission signals the next one, in submit order. A value counts as done
@@ -526,6 +575,14 @@ void vk_sync_split_insert(VkCommandBuffer cb);
 // Submit the recorded prefix and wait for its dedicated fence, without advancing the full submission's timeline.
 // Replay thread, outside a render pass. Returns a fresh recording command buffer; old resources keep their lifetime.
 VkCommandBuffer vk_sync_split_wait(void);
+// A split whose part cannot go to the queue yet (vk_exec.c par_defer: the end of a sliced pass whose slices are still
+// being recorded): the recorder finishes the part's queued calls and the part stays open, and a new begun one is
+// returned for the rest of the submission. Up to 8 parts may be held. vk_sync_split_finish then has tail make the
+// held-back calls into the oldest held part on the calling thread, ends it and submits it ahead of every later part:
+// the replay finishes every held part before any other split and before its submission ends, and does nothing in
+// between that needs a held part on the GPU.
+VkCommandBuffer vk_sync_split_defer(void);
+void vk_sync_split_finish(void (*tail)(VkCommandBuffer cb, void *arg), void *arg);
 // TOTK_TRACE=perf: the replay notes each draw or dispatch of the part being timed (kind 0 draw, 1 indirect draw, 2
 // dispatch, 3 indirect dispatch; a, b: the NVN 2 names of its vertex and fragment stages, or its compute stage and 0;
 // work: vertices x instances or groups, 0 when indirect), so a slow part can name its work. vk_sync_noting: 1 while

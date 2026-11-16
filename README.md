@@ -24,21 +24,26 @@ As far as we know, no other static recompilation of a Switch 2 game is public.
 ## Status
 
 **Playable on recent NVIDIA cards, well past the first level.** Players report runs through layer -101, sublayer 200,
-the Glacier layer, Snow World (Layer 500) and the Tempest layer. The current release is 0.3.0. The
+the Glacier layer, Snow World (Layer 500) and the Tempest layer. The current release is 0.4.0. The
 [latest release](https://github.com/Lucas-blip-png/dkb-pc-recomp/releases/latest) carries an installer that
-builds the game from your own dump: [docs/installer.md](docs/installer.md). What still fails:
+builds the game from your own dump (`.nup`, `.nx` or folders), and a Linux AppImage: [docs/installer.md](docs/installer.md).
+0.4.0 fixes the Snow World and Glacier device loss on NVIDIA (#196, #197, #264), turns the Vulkan recorder off on AMD's
+Windows driver (the device loss fix for #84, #124, #142, #155, #167, #176), and guards the guest crashes at the title
+screen and on loads (#157, #206), on layer changes (#218) and in a record loop (#229). What still fails:
 
-- Device lost on NVIDIA in the Glacier rock ride ([#196](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/196))
-  and in Layer 500 ([#197](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/197)).
-- Device lost on AMD cards with AMD's Windows driver. On 0.3.0, `vk_recorder = 0` in `dkb.ini` stopped it for three
-  players (#84, #155, #142), and it is the default on `bananza` since d161f88. Other AMD reports wait for a retest
-  (#124, #176, #193). GPU hangs under RADV on Linux are still open (#99, #122, #198, #204).
-- Guest crashes in later areas (#148, #157, #136, #218, #229).
-- Heavy scenes below 60 fps (#141, #156, #194, #207). On `bananza` (70c1b4a) new defaults raise our heavy test scene
+- GPU hangs under RADV on Linux (#99, #122, #198, #204), and some AMD reports that wait for a retest (#193, #206).
+- Guest crashes without a reproduction (#126, #136, #148).
+- Intel Arc A770: a driver fault about 20 s in (#3).
+- Missing effects in the Tempest layer (#221): a player reports the tornado draws on `bananza`; retest asked.
+- Heavy scenes below 60 fps (#141, #156). Since 0.4.0 new defaults raise our heavy test scene
   from about 53 to 58 fps and halve the frames over 25 ms; a stall of about 0.45 s on area loads is left. See
   [docs/dkb-lowend.md](docs/dkb-lowend.md).
+- A soft 3D picture: the game's dynamic resolution draws the scene at 2/3 of the output (1280x720 at 1080p, #210).
+  On `bananza` (9190e6b), `scene_res = full` draws it at the output size.
+- Add-on content: the installer unpacks DLC from a `.nup` (57eaed9); a player confirmed the DLC and the 3.2.0
+  update load (#183). Loose RomFS mods load from a `mods` folder beside `dkb.exe` (7779dda).
 
-Progress, day by day: [docs/devlog.md](docs/devlog.md). Last updated: 13 November 2026.
+RecompLauncher on Linux and macOS: [docs/recomp-launcher.md](docs/recomp-launcher.md). Progress, day by day: [docs/devlog.md](docs/devlog.md). Last updated: 15 November 2026.
 
 | Phase | | State |
 | --- | --- | --- |
@@ -47,7 +52,7 @@ Progress, day by day: [docs/devlog.md](docs/devlog.md). Last updated: 13 Novembe
 | F2 NVN 2 | ✅ | 700 NVN 2 entry points answered; the game loop runs. 51 new command buffer calls (mesh shaders, VRS, DLSS, push constants…) are accepted but not recorded yet. |
 | F3 Shaders | ✅ | All 4,820 Ampere shader stages of the first 3D scene go through Eglantine's Ampere-to-Maxwell lowering and TotK Recomp's translator to SPIR-V. |
 | F4 Vulkan | ✅ | The title screen and the tutorial's 3D scene render. |
-| F5 Playable | ✅ | Controller, guide movies (VP9), push constants, installer and releases 0.1.0 to 0.3.0. |
+| F5 Playable | ✅ | Controller, guide movies (VP9), push constants, installer and releases 0.1.0 to 0.4.0. |
 | F6 Stability | 🚧 | Device lost on NVIDIA and AMD, RADV hangs and guest crashes in later areas. |
 | F7 Performance | 🚧 | A heavy scene runs at about 58 fps on `bananza`, with a stall of about 0.45 s on area loads. |
 | F8 Image | 🚧 | Missing effects, some textures and terrain details. |
@@ -85,7 +90,7 @@ being worked on right now.
 
 - [#3](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/3) **Test on your GPU.** Everything so far was checked
   on one NVIDIA card. Runs on AMD, Intel and other NVIDIA cards, with logs, show what breaks there.
-- [#7](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/7) **Play past the tutorial** and report where it stops.
+- **Play as far as you can** and report where it stops, with the crash form.
 - [#9](https://github.com/Lucas-blip-png/dkb-pc-recomp/issues/9) **The GPU fault after the first guide movie**: seen
   on three NVIDIA drivers (617.14, 617.42, 621.01); runs on AMD and Intel would show whether it is NVIDIA's.
 
@@ -143,7 +148,7 @@ crash. Follow the
 The executable is made from the game's own code, so it cannot be shared. Everyone builds it from their own dump; the
 installer does this for you ([docs/installer.md](docs/installer.md)).
 
-**Which version of the game?** Base 1.0.0 and update 3.2.0 (title version 458752, the newest). The installer takes either a `.nup` file (the container Eglantine and Eden load; with the 3.2.0 update inside it builds 3.2.0) or ExeFS and RomFS folders. Other updates are refused by their hashes. The 3.2.0 build installs and boots, and held 60 fps for 150 s at the start on an RTX 5060 Ti, but nobody has played it yet. Add-on content (DLC) has a reader (an `aoc-<n>` folder beside the executable, [docs/dkb-testing.md](docs/dkb-testing.md)) checked against synthetic packs and a real one, but it has not been tried in the game.
+**Which version of the game?** Base 1.0.0 and update 3.2.0 (title version 458752, the newest). The installer takes either a `.nup` file (the container Eglantine and Eden load; with the 3.2.0 update inside it builds 3.2.0) or ExeFS and RomFS folders. Other updates are refused by their hashes. The 3.2.0 build installs and boots, and holds 60 fps for 150 s at the start on an RTX 5060 Ti, but nobody has played it yet. Add-on content (DLC) has a reader (an `aoc-<n>` folder beside the executable, [docs/dkb-testing.md](docs/dkb-testing.md)) checked against synthetic packs and a real one, but it has not been tried in the game.
 
 **Linux?** Preview. The release page carries `DKB-Setup-<version>-linux-x86_64.tar.gz`: the sources and a setup script, not a
 binary. You install the system packages and it builds the game from your dump. The build from source is verified on AMD

@@ -64,6 +64,8 @@ typedef struct PoolRec {
     uint32_t wb_sub;                   // replay: the last submission that wrote mirror bytes back to guest memory
     uint32_t mgen;                     // gen_lock: every page write stamped up to this generation is in the mirror
                                        // (or in a copy queued before its next use)
+    struct KeptRange { uint64_t lo, hi; } *kept;   // mirror_lock: whole pages of GPU writes kept in the mirror (vk_mem_gpu_kept),
+    int nkept, ckept;                  // as offsets from import_lo, sorted and disjoint; mirror_sync leaves them out of a flush
     uint64_t fl_lo, fl_hi;             // flush_lock: nvnMemoryPoolFlushMappedRange bytes not copied yet (fl_hi 0: none)
     // Shadow storage (POOL_IMPORT in shadow mode, "shadow storage" below): buf is a host-visible copy of the guest pages.
     VmaAllocation salloc;
@@ -87,6 +89,14 @@ static void mirror_retire(void *arg);    // completion thread: destroys a finali
 static void grow(void **arr, int *cap, size_t elem);
 
 static PlatMutex pool_lock = PLAT_MUTEX_INIT;
+// Shared acquires try first and time a contended wait (TOTK_TRACE=perf, perf_lock_wait): a pool imported or mapped on
+// another thread holds the lock exclusively across driver calls, and every draw resolves its buffers under it.
+static void pool_lock_shared(void) {
+    if (plat_mutex_trylock_shared(&pool_lock)) return;
+    uint64_t t0 = kern_now_ns();
+    plat_mutex_lock_shared(&pool_lock);
+    if (rt_trace & RT_TRACE_PERF) perf_lock_wait(PERF_LOCK_POOL, kern_now_ns() - t0);
+}
 // Bumped under pool_lock (exclusive) by every change to the index or a page table: vk_mem_resolve's per-thread hits
 // stay valid while it is unchanged.
 static uint64_t pool_gen = 1;
@@ -99,6 +109,7 @@ static PoolRec **phys_list;            // physical pools by key, for MapVirtual 
 static int nphys, cap_phys;
 static int32_t n_imports, n_import_failures;
 static volatile uint64_t import_alloc_ns;   // all vkAllocateMemory calls that imported guest memory (vk_mem_census logs it)
+static volatile uint64_t import_touch_ns, import_total_ns;   // mem_touch and all of import_pool, same census line
 static PlatMutex lazy_lock = PLAT_MUTEX_INIT;   // one deferred import at a time (the driver serializes them anyway)
 static volatile int32_t n_lazy_imports;         // pools imported on their first GPU use instead of at nvnMemoryPoolInitialize
 static PFN_vkGetMemoryHostPointerPropertiesEXT p_host_props;
@@ -124,8 +135,18 @@ static int memory_type(const VkCtx *c, uint32_t bits, VkMemoryPropertyFlags want
 }
 
 // CPU-visible storage: the guest pages themselves become the buffer's memory (VK_EXT_external_memory_host).
+static int import_pool_timed(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size);
 static int import_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
+    uint64_t t0 = qpc();
     mem_touch(addr, size);   // the driver pins the pages: reserved ones of a lazy heap (TOTK_HEAP_LAZY) would fail
+    uint64_t t1 = qpc();
+    int ok = import_pool_timed(c, r, addr, size);
+    __atomic_add_fetch(&import_touch_ns, t1 - t0, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&import_total_ns, qpc() - t0, __ATOMIC_RELAXED);
+    return ok;
+}
+
+static int import_pool_timed(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
     if (shadow_on) return shadow_pool(c, r, addr, size);
     if (!p_host_props)
         p_host_props = (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(c->device, "vkGetMemoryHostPointerPropertiesEXT");
@@ -332,6 +353,7 @@ static void destroy_rec(VkCtx *c, PoolRec *r) {
     if (r->mem) vkFreeMemory(c->device, r->mem, NULL);
     if (r->alloc) vmaFreeMemory(c->vma, r->alloc);
     free(r->pt);
+    free(r->kept);
     free(r);
 }
 
@@ -341,7 +363,7 @@ int vk_pool_init(pool_t *p) {
     // Reinitializing the same object retires its old backing before installing the new mapping. In particular,
     // descriptors at a reused address must not inherit registrations from a previous storage lifetime.
     int reinit = 0;
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     for (int i = 0; i < pool_index.n; i++) if (pool_index.e[i].key == p) { reinit = 1; break; }
     plat_mutex_unlock_shared(&pool_lock);
     if (reinit) vk_pool_fini(p);
@@ -513,20 +535,59 @@ int vk_pool_map_virtual(pool_t *v, int n, const void *requests) {
 
 // Per-thread copies of resolved import and physical pools that overlap no other index entry (so pidx_find picks them for
 // any range inside), valid while pool_gen is unchanged: the replay resolves a few dozen pools thousands of times per
-// frame (16 vertex streams and every buffer binding of each draw). Direct-mapped by the 4 KiB page of the address, so
-// a hit is one compare however many pools a frame touches. TOTK_RESOLVE_CHECK=1 compares every hit with the locked
-// lookup and stops on a difference.
+// frame (16 vertex streams and every buffer binding of each draw). A thread keeps up to RPOOL_N of them sorted by
+// address (rpool, all of one pool_gen, emptied when it moves), and a byte map from the 64 KiB block of an address to
+// the copy that held it last (rmap): a hit is one compare, and a block the map does not answer is found by a binary
+// search of the copies before pool_lock is taken. With a table of 512 copies indexed by the 4 KiB page, as before, 40%
+// of the resolves in Bananza's Lake Level (3.2.0) missed: a pool filled one slot per page it was read at, the vertex
+// data of a frame is spread over more pages than the table held, and each miss took pool_lock shared, an atomic write
+// to one cache line for every thread of a sliced pass. Now 2.4% miss, from 20 KiB per thread (the old table took 36).
+// TOTK_RESOLVE_CHECK=1 compares every hit with the locked lookup and stops on a difference.
 static int rec_class(const PoolRec *r) {
     if (r->kind != POOL_IMPORT) return VK_MCLS_DEVICE;
     return r->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS ? VK_MCLS_HOST_NOACC
          : r->flags & NVN_MEMORY_POOL_FLAGS_CPU_CACHED ? VK_MCLS_HOST_CACHED : VK_MCLS_HOST_UNC;
 }
 
-typedef struct { uint64_t gen, lo, hi, base, end; VkBuffer buf; VmaAllocation alloc; int cls; void *pool; } ResolveHit;
-#define RHIT_SLOTS 512
-static _Thread_local ResolveHit rhit[RHIT_SLOTS];
+typedef struct { uint64_t lo, hi, base, end; VkBuffer buf; VmaAllocation alloc; int cls; void *pool; } ResolveHit;
+#define RPOOL_N 255   // rmap holds an index
+#define RMAP_BLOCKS 4096
+static _Thread_local ResolveHit rpool[RPOOL_N];
+static _Thread_local int rpool_n;
+static _Thread_local uint64_t rpool_gen;
+static _Thread_local uint8_t rmap[RMAP_BLOCKS];   // the rpool index that held an address of the block last
 
-static ResolveHit *rhit_slot(uint64_t addr) { return &rhit[(addr >> 12 ^ addr >> 21) & (RHIT_SLOTS - 1)]; }
+static uint8_t *rmap_slot(uint64_t addr) { return &rmap[(addr >> 16 ^ addr >> 28) & (RMAP_BLOCKS - 1)]; }
+
+// The copy holding [addr, end) at pool_gen g, NULL for none.
+static const ResolveHit *rhit_find(uint64_t g, uint64_t addr, uint64_t end) {
+    if (rpool_gen != g) return NULL;
+    uint8_t *m = rmap_slot(addr);
+    const ResolveHit *h = &rpool[*m];
+    if (*m < rpool_n && addr >= h->lo && end <= h->hi) return h;
+    int lo = 0, hi = rpool_n;   // the last copy with lo <= addr
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (rpool[mid].lo <= addr) lo = mid + 1;
+        else hi = mid;
+    }
+    if (!lo || !(addr >= rpool[lo - 1].lo && end <= rpool[lo - 1].hi)) return NULL;
+    *m = (uint8_t)(lo - 1);
+    return &rpool[lo - 1];
+}
+
+// A copy for a pool's index entry [lo, hi) at pool_gen g, kept in order: the entry overlaps no other one.
+static ResolveHit *rhit_add(uint64_t g, uint64_t lo, uint64_t hi) {
+    if (rpool_gen != g || rpool_n == RPOOL_N) rpool_gen = g, rpool_n = 0;
+    int k = 0;
+    while (k < rpool_n && rpool[k].lo < lo) k++;
+    if (k == rpool_n || rpool[k].lo != lo) {
+        memmove(&rpool[k + 1], &rpool[k], sizeof *rpool * (size_t)(rpool_n - k));
+        rpool_n++;
+    }
+    rpool[k].lo = lo, rpool[k].hi = hi;
+    return &rpool[k];
+}
 
 static int resolve_check_on(void) {
     static int on = -1;
@@ -545,7 +606,7 @@ int vk_mem_inspect(uint64_t addr, uint64_t size, VkMemInspect *out) {
     if (!addr || !size || addr > UINT64_MAX - size) return 0;
     int ok = 0;
     VkMemInspect result = {0};
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     // Match bind_range's one-byte resolver candidate, then check the whole request against that same backing.
     const pidx_ent *e = pidx_find(&pool_index, addr, 1);
     const PoolRec *r = e ? e->buf : NULL;
@@ -609,7 +670,7 @@ int vk_mem_descriptor_key(uint64_t addr, uint64_t size, VkDescKey *out) {
     memset(out, 0, sizeof *out);
     if (!addr || !size || addr > UINT64_MAX - size) return 0;
     int ok = 0;
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     const pidx_ent *e = pidx_find(&pool_index, addr, size);
     const PoolRec *r = e ? e->buf : NULL;
     if (r && r->kind == POOL_IMPORT) {
@@ -639,8 +700,8 @@ int vk_mem_descriptor_key(uint64_t addr, uint64_t size, VkDescKey *out) {
 int vk_mem_resolve(uint64_t addr, uint64_t size, VkMemSpan *out) {
     memset(out, 0, sizeof *out);
     uint64_t g = __atomic_load_n(&pool_gen, __ATOMIC_ACQUIRE), end = addr + size;
-    const ResolveHit *h = rhit_slot(addr);
-    if (end >= addr && h->gen == g && addr >= h->lo && end <= h->hi) {
+    const ResolveHit *h = end >= addr ? rhit_find(g, addr, end) : NULL;
+    if (h) {
         out->buffer = h->buf;
         out->offset = addr - h->base;
         out->avail = h->end - addr;
@@ -662,7 +723,7 @@ int vk_mem_resolve(uint64_t addr, uint64_t size, VkMemSpan *out) {
 // The pool index lookup under the lock; a non-overlapped import or physical pool goes into the address's cache slot.
 static int resolve_locked(uint64_t addr, uint64_t size, VkMemSpan *out) {
     memset(out, 0, sizeof *out);
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     const pidx_ent *e = pidx_find(&pool_index, (uintptr_t)addr, size);
     PoolRec *r = e ? e->buf : NULL;
     int ok = 0;
@@ -670,9 +731,9 @@ static int resolve_locked(uint64_t addr, uint64_t size, VkMemSpan *out) {
     if (r && (r->kind == POOL_IMPORT ? r->buf != VK_NULL_HANDLE : r->kind == POOL_PHYS)) {
         int i = (int)(e - pool_index.e);
         if ((i == 0 || pool_index.maxhi[i - 1] <= e->lo) && (i + 1 == pool_index.n || pool_index.e[i + 1].lo >= e->hi)) {
-            ResolveHit *h = rhit_slot(addr);
-            h->gen = __atomic_load_n(&pool_gen, __ATOMIC_RELAXED);   // stable: changed only under the exclusive lock
-            h->lo = e->lo, h->hi = e->hi, h->buf = r->buf, h->cls = rec_class(r);
+            // pool_gen is stable here: it changes only under the exclusive lock.
+            ResolveHit *h = rhit_add(__atomic_load_n(&pool_gen, __ATOMIC_RELAXED), e->lo, e->hi);
+            h->buf = r->buf, h->cls = rec_class(r);
             if (r->kind == POOL_IMPORT) h->base = r->import_lo, h->end = r->import_hi, h->alloc = NULL, h->pool = r;
             else h->base = r->lo, h->end = r->lo + r->size, h->alloc = r->alloc, h->pool = NULL;
         }
@@ -785,11 +846,17 @@ void vk_mem_census(uint64_t frame) {
     typedef struct { int kind; uint32_t flags; uint64_t n, bytes; } Group;
     Group g[64];
     int ng = 0;
-    uint64_t total[4] = {0}, count[4] = {0}, used_n = 0, used_bytes = 0;
-    plat_mutex_lock_shared(&pool_lock);
+    uint64_t total[4] = {0}, count[4] = {0}, used_n = 0, used_bytes = 0, prev_hi = 0, near_n = 0, gap_bytes = 0;
+    pool_lock_shared();
     for (int i = 0; i < pool_index.n; i++) {
         const PoolRec *r = pool_index.e[i].buf;
-        if (r->kind == POOL_IMPORT && r->used) used_n++, used_bytes += r->size;
+        if (r->kind == POOL_IMPORT && r->used) {
+            used_n++, used_bytes += r->size;
+            // Neighbours: a used imported pool that starts within 1 MiB of the previous one's import end (the index is
+            // sorted by address), so one larger import could have covered both.
+            if (prev_hi && r->import_lo >= prev_hi && r->import_lo - prev_hi <= (1u << 20)) near_n++, gap_bytes += r->import_lo - prev_hi;
+            if (r->import_hi) prev_hi = r->import_hi;
+        }
         int j = 0;
         while (j < ng && (g[j].kind != r->kind || g[j].flags != r->flags)) j++;
         if (j == ng && ng < 64) g[ng++] = (Group){r->kind, r->flags, 0, 0};
@@ -807,6 +874,9 @@ void vk_mem_census(uint64_t frame) {
     rt_log("mem: of the %llu imported pools, %llu (%.1f MiB) were resolved by the GPU so far; %.0f ms in all imports (%d, %d of them on first GPU use)",
            (unsigned long long)count[POOL_IMPORT], (unsigned long long)used_n, used_bytes / 1048576.0,
            __atomic_load_n(&import_alloc_ns, __ATOMIC_RELAXED) / 1e6, n_imports, n_lazy_imports);
+    rt_log("mem: imports took %.0f ms in all, %.0f ms of it committing and touching the pages; %llu used pools start within "
+           "1 MiB of the previous one (%.1f MiB of gaps)", __atomic_load_n(&import_total_ns, __ATOMIC_RELAXED) / 1e6,
+           __atomic_load_n(&import_touch_ns, __ATOMIC_RELAXED) / 1e6, (unsigned long long)near_n, gap_bytes / 1048576.0);
     static const char *const kinds[] = {"", "import", "physical", "virtual"};
     for (int j = 0; j < ng; j++) {
         char f[160];
@@ -864,6 +934,10 @@ static uint64_t gen_pages[1024];
 // sync skips regions with nothing newer than its pool's mirror.
 #define REG_SHIFT 21
 static uint32_t reg_max[RT_ADDRESS_LIMIT >> REG_SHIFT];
+// Per page, the generation of the last stamp that reported a GPU write the page's VRAM mirror already holds
+// (vk_gpu_written_into), allocated per chunk on the first such stamp. While a page's generation is still that stamp,
+// mirror_sync leaves the page out of its copies.
+static uint32_t *own_chunk[GEN_CHUNKS];   // gen_lock
 
 // Every write-watch query of the generation table (gen_lock held exclusively): calls, bytes and time since the last
 // mirror summary, all consumers together; the queries that found written pages (they also flush TLBs) apart.
@@ -1284,7 +1358,7 @@ void vk_mem_gpu_pending(uint64_t addr, uint64_t size) {
 
 void vk_gpu_written(uint64_t addr, uint64_t size) {
     if (shadow_on && size) {
-        plat_mutex_lock_shared(&pool_lock);
+        pool_lock_shared();
         const pidx_ent *e = pidx_find(&pool_index, addr, size);
         PoolRec *r = e ? e->buf : NULL;
         plat_mutex_lock(&shadow_lock);
@@ -1299,6 +1373,44 @@ void vk_gpu_written(uint64_t addr, uint64_t size) {
         plat_mutex_unlock_shared(&pool_lock);
     }
     vk_guest_written(addr, size);
+}
+
+// As vk_gpu_written, for a write the GPU made into buffer buf. When buf is the VRAM mirror of the pool holding the range,
+// the mirror has the GPU's bytes, and vk_mem_mirror_end copies them into guest memory (or vk_mem_gpu_kept keeps them in
+// the mirror). The stamp still tells every other reader of guest memory (the texture checks), but the pool's next
+// mirror_sync need not copy those pages in again. In Hilltop those copies were about 57 MiB of the 58 MiB a frame the
+// syncs uploaded, and the copy of a kept page put stale guest bytes over the GPU's. So such a stamp
+// is noted per page (own_chunk) when the mirror already holds every older write of the page: its previous stamp is
+// covered by the mirror's mgen or is itself such a stamp. A page with a newer write the mirror lacks fails that test, and
+// a CPU write stamped later gives the page a newer generation, so mirror_sync copies both as before.
+void vk_gpu_written_into(uint64_t addr, uint64_t size, VkBuffer buf) {
+    if (!buf || !vk_mirror_on || shadow_on || !size || nvn_gpu_only(addr)) {
+        vk_gpu_written(addr, size);
+        return;
+    }
+    pool_lock_shared();
+    const pidx_ent *e = pidx_find(&pool_index, addr, size);
+    PoolRec *r = e ? e->buf : NULL;
+    if (!r || ms_get(r) != MS_ON || r->mbuf != buf || addr < r->import_lo || addr + size > r->import_hi) {
+        plat_mutex_unlock_shared(&pool_lock);
+        vk_guest_written(addr, size);
+        return;
+    }
+    uint64_t lo = addr & ~0xfffull, hi = (addr + size + 0xfff) & ~0xfffull;
+    plat_mutex_lock(&gen_lock);
+    uint32_t g = ++gen_now, mgen = r->mgen;
+    for (uint64_t a = lo; a < hi; a += 1ull << GEN_PAGE_SHIFT) {
+        uint32_t *s = gen_slot(a, 1);
+        if (!s) continue;
+        uint64_t ci = a >> GEN_CHUNK_SHIFT;
+        if (!own_chunk[ci] && !(own_chunk[ci] = calloc(GEN_PER_CHUNK, sizeof(uint32_t))))
+            rt_fatal("vk: out of memory for page generations");
+        uint32_t *o = &own_chunk[ci][(a >> GEN_PAGE_SHIFT) & (GEN_PER_CHUNK - 1)], prior = *s;
+        stamp_page(a, g);
+        *o = prior <= mgen || prior == *o ? g : 0;
+    }
+    plat_mutex_unlock(&gen_lock);
+    plat_mutex_unlock_shared(&pool_lock);
 }
 
 static void shadow_log(uint64_t frame) {
@@ -1319,7 +1431,7 @@ void vk_mem_dirty_submit(void) {
     uint32_t prev = dirty_sub;   // the submit whose replay noted the bindings
     dirty_sub = prev + 1 ? prev + 1 : 1;
     uint64_t eager[DC_N] = {0}, lazy[DC_N] = {0}, ln[DC_N] = {0}, lb[DC_N] = {0}, untracked = 0, queries = 0;
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     if (dcap < pool_index.n) {
         dcap = pool_index.n * 2;
         dlist = realloc(dlist, (size_t)dcap * sizeof *dlist);
@@ -1445,7 +1557,8 @@ static void dirty_frame(uint64_t frame) {
 // the CPU reads and writes; textures and every host path that reads or writes pool bytes keep using it.
 // - CPU -> mirror: the first access of a submission to a mirror syncs it (mirror_sync): the 2 MiB write-watch
 //   snapshots of its regions for this epoch (snap_regions, shared with the texture checks: the OS bits keep one
-//   consumer, the shared page generations) and every page stamped after the mirror's mgen goes into a copy; so do the
+//   consumer, the shared page generations) and every page stamped after the mirror's mgen goes into a copy, unless
+//   that stamp reported a GPU write the mirror already holds (vk_gpu_written_into); so do the
 //   nvnMemoryPoolFlushMappedRange ranges. The first use copies the whole range. The copies run in a prologue command
 //   buffer that vk_sync.c submits right before the part that accessed the mirror first, between full barriers.
 //   vk_mem_mirror_begin snaps the regions of the pools the previous submission accessed in a few merged queries.
@@ -1465,6 +1578,7 @@ int vk_mirror_on;
 static int mirror_verify;
 static int mirror_sparse;
 static int mirror_gap = 2;             // pre-snap: hot pools at most this many 2 MiB regions apart share one query
+static int mirror_own = 1;             // TOTK_MIRROR_OWN: mirror_sync skips the pages own_chunk notes (rt_knob mode)
 static PoolRec **mlist;                // pool_lock: mirrored pools by import_lo
 static int nm, mcap;
 static uint32_t msub;                  // replay: number of the submission being recorded
@@ -1484,8 +1598,12 @@ static PlatMutex mirror_lock = PLAT_MUTEX_INIT;
 // vk_spec_count is set once, by the replay thread, so a caller reads it once and pairs the two on that reading.
 static int mem_workers;   // vk_mem_threads: the workers of sliced passes (vk_exec.c) bind mirrors too
 static int mirror_lock_if_shared(void) {
-    if (!vk_spec_count() && !__atomic_load_n(&mem_workers, __ATOMIC_ACQUIRE)) return 0;
+    // TOTK_MEMORY=verify reads r->kept on the completion thread (kept_page), so it always takes the lock.
+    if (!mirror_verify && !vk_spec_count() && !__atomic_load_n(&mem_workers, __ATOMIC_ACQUIRE)) return 0;
+    if (plat_mutex_trylock(&mirror_lock)) return 1;
+    uint64_t t0 = kern_now_ns();   // contended: TOTK_TRACE=perf counts the long waits (perf_lock_wait)
     plat_mutex_lock(&mirror_lock);
+    if (rt_trace & RT_TRACE_PERF) perf_lock_wait(PERF_LOCK_MIRROR, kern_now_ns() - t0);
     return 1;
 }
 static void mirror_unlock(int locked) {
@@ -1494,7 +1612,7 @@ static void mirror_unlock(int locked) {
 
 typedef struct {
     uint64_t subs, syncs, upload_bytes, upload_copies, first_n, first_bytes, wb_bytes, wb_copies, wb_ranges;
-    uint64_t presnap_queries, sync_queries, presnap_t, sync_t, prologues, presnap_bytes;
+    uint64_t presnap_queries, sync_queries, presnap_t, sync_t, prologues, presnap_bytes, own_bytes;
 } MirrorAcc;
 static MirrorAcc mrep;                 // replay: this submission
 static MirrorAcc macc;                 // mirror_stat_lock: since the last summary
@@ -1504,7 +1622,7 @@ static volatile int64_t m_flush_calls, m_flush_bytes, v_pages, v_skipped, v_mism
 
 static void sparse_cache_open(void);
 
-static void mirror_mode(int discrete) {
+static void mirror_mode(int discrete, uint32_t vendor) {
     const char *e = cfg_value("TOTK_MEMORY");
     int mode = discrete ? 1 : 0;   // 0 import, 1 mirror, 2 verify
     const char *why = discrete ? "auto, discrete gpu" : "auto, uma";
@@ -1516,9 +1634,20 @@ static void mirror_mode(int discrete) {
     }
     vk_mirror_on = mode > 0;
     mirror_verify = mode == 2;
+    // The sparse write-back dispatch (sparse_ranges): by default on NVIDIA, the one vendor it was measured on;
+    // TOTK_SPARSE_MIRROR_COPY=1 turns it on elsewhere, 0 off.
     const char *sparse = cfg_get("TOTK_SPARSE_MIRROR_COPY");
-    mirror_sparse = vk_mirror_on && sparse && !strcmp(sparse, "1");
+    mirror_sparse = vk_mirror_on && (sparse && *sparse ? strcmp(sparse, "0") != 0 : vendor == 0x10de);
+    if (vk_mirror_on)
+        rt_log("mem: small write-back ranges are copied by %s (TOTK_SPARSE_MIRROR_COPY=%s)",
+               mirror_sparse ? "one compute dispatch a pool" : "copy regions", sparse && *sparse ? sparse : "auto");
     if (mirror_sparse) sparse_cache_open();
+    if (vk_mirror_on) {
+        mirror_own = rt_knob("MIRROR_OWN", "1");
+        if (mirror_own != 1)
+            rt_log("mem: pages the mirrors' own GPU writes stamped are copied in again%s (TOTK_MIRROR_OWN=%s)",
+                   mirror_own == 2 ? " in the A blocks" : "", mirror_own == 2 ? "ab" : "0");
+    }
     const char *g = cfg_get("TOTK_MIRROR_GAP");
     mirror_gap = g && *g ? atoi(g) : 2;
     if (mirror_gap < 0) mirror_gap = 0;
@@ -1545,11 +1674,13 @@ static void range_add(MRange **a, int *n, int *cap, PoolRec *r, uint64_t off, ui
 // that vk_mem_mirror_end moves into wbl: every slice of a submission is recorded before its end, so the lists are not
 // written then. With eight threads adding to wbl under mirror_lock, a profile had 7% of the slices' time waiting for
 // the lock in vk_mem_gpu_wrote.
-typedef struct WbLocal { MRange *a; int n, cap; struct WbLocal *next; } WbLocal;
+// The kept GPU writes of the submission (vk_mem_gpu_kept), as whole pages, go into a second list of each thread's
+// (k), which vk_mem_mirror_end merges into the pools' kept lists (kept_take).
+typedef struct WbLocal { MRange *a; int n, cap; MRange *k; int nk, ck; struct WbLocal *next; } WbLocal;
 static WbLocal *wb_locals;   // every thread's, added under mirror_lock and kept until exit
 static _Thread_local WbLocal *wb_mine;
 
-static void wb_local_add(PoolRec *r, uint64_t off, uint64_t size) {
+static WbLocal *wb_local(void) {
     if (!wb_mine) {
         WbLocal *w = calloc(1, sizeof *w);
         if (!w) rt_fatal("vk: out of memory");
@@ -1559,7 +1690,12 @@ static void wb_local_add(PoolRec *r, uint64_t off, uint64_t size) {
         plat_mutex_unlock(&mirror_lock);
         wb_mine = w;
     }
-    range_add(&wb_mine->a, &wb_mine->n, &wb_mine->cap, r, off, size);
+    return wb_mine;
+}
+
+static void wb_local_add(PoolRec *r, uint64_t off, uint64_t size) {
+    WbLocal *w = wb_local();
+    range_add(&w->a, &w->n, &w->cap, r, off, size);
 }
 
 static void wb_locals_take(void) {   // replay thread, no slice being recorded
@@ -1584,8 +1720,13 @@ static void range_add(MRange **a, int *n, int *cap, PoolRec *r, uint64_t off, ui
 #define MRANGE_LESS(x, y) ((x)->r != (y)->r ? (uintptr_t)(x)->r < (uintptr_t)(y)->r : (x)->off < (y)->off)
 MSORT_DEFINE(sort_ranges, MRange, MRANGE_LESS)   // by pool, then offset, without a call per comparison (msort.h)
 
-// Local experiment: one dispatch for a pool's many small write-back ranges. The usual transfer path
-// handles large pools, bulk copies, and any unsupported alignment or device capability.
+// One dispatch for a pool's many small write-back ranges (TOTK_SPARSE_MIRROR_COPY, on by default on NVIDIA; 0 copies
+// every range with vkCmdCopyBuffer). A copy region costs the GPU about 0.7 us whatever its size: in the Hilltop Layer of Surf Hills
+// (3.2.0) 5,500 write-back ranges a frame of 870 bytes on average took 4.2 ms of an RTX 5090's GPU time as copy
+// regions and 0.4 ms as one workgroup each. The transfer path keeps bulk copies, where it is faster (the mirror
+// uploads, 80 KiB a range, took 4.5 ms as copies and 11 to 15 as a dispatch): the uploads, a pool's ranges over 4 KiB
+// on average, and any single range over SPARSE_RANGE_MAX or not word-aligned, since one 32-lane workgroup copies a
+// range. Also any unsupported device limit.
 static struct {
     int tried;
     PFN_vkCmdPushDescriptorSetKHR push;
@@ -1732,16 +1873,23 @@ static void sparse_cache_close(void) {
     for (int i = 0; i < n; i++) sparse_batch_free(ready[i]);
 }
 
+#define SPARSE_RANGE_MAX 65536u
+
+// The pool's merged ranges mregions[0, count): the ones the dispatch can take (word-aligned, at most SPARSE_RANGE_MAX)
+// are moved to the front, and their count is returned when the dispatch should copy them; 0 leaves every range to
+// vkCmdCopyBuffer.
 static int sparse_ranges(VkCtx *c, uint64_t size, int count) {
-    if (count < 64 || size > 4u * 1024 * 1024 || size > c->props.limits.maxStorageBufferRange ||
-        (uint32_t)count > c->props.limits.maxComputeWorkGroupCount[0]) return 0;
+    if (count < 64 || size > c->props.limits.maxStorageBufferRange) return 0;
+    int small = 0;
     uint64_t total = 0;
     for (int i = 0; i < count; i++) {
-        const VkBufferCopy *region = &mregions[i];
-        if ((region->srcOffset | region->size) & 3) return 0;
-        total += region->size;
+        VkBufferCopy region = mregions[i];
+        if ((region.srcOffset | region.size) & 3 || region.size > SPARSE_RANGE_MAX) continue;
+        mregions[i] = mregions[small], mregions[small++] = region;
+        total += region.size;
     }
-    return total <= 128u * (uint64_t)count;
+    if (small < 64 || (uint32_t)small > c->props.limits.maxComputeWorkGroupCount[0]) return 0;
+    return total <= 4096u * (uint64_t)small ? small : 0;
 }
 
 static void sparse_dispatch(VkCommandBuffer cb, SparseBatch *batch, PoolRec *pool, uint64_t size, int count) {
@@ -1790,21 +1938,20 @@ static int copy_ranges(VkCommandBuffer cb, MRange *a, int n, int to_mirror, uint
             mregions[k++] = (VkBufferCopy){lo, lo, hi - lo};
         }
         if (!k) continue;
-        int dispatched = 0;
-        if (c && sparse_ranges(c, lim, k)) {
+        int dispatched = c ? sparse_ranges(c, lim, k) : 0;   // the first ones go to the dispatch, the rest are copied
+        if (dispatched) {
             if (!sparse_tried) {
                 sparse = sparse_batch_create(c, n);
                 sparse_tried = 1;
             }
             if (sparse) {
-                sparse_dispatch(cb, sparse, r, lim, k);
+                sparse_dispatch(cb, sparse, r, lim, dispatched);
                 rec += 4;
-                dispatched = 1;
-            }
+            } else dispatched = 0;
         }
-        if (!dispatched) {
-            if (to_mirror) vkCmdCopyBuffer(cb, r->buf, r->mbuf, (uint32_t)k, mregions);
-            else vkCmdCopyBuffer(cb, r->mbuf, r->buf, (uint32_t)k, mregions);
+        if (dispatched < k) {
+            if (to_mirror) vkCmdCopyBuffer(cb, r->buf, r->mbuf, (uint32_t)(k - dispatched), mregions + dispatched);
+            else vkCmdCopyBuffer(cb, r->mbuf, r->buf, (uint32_t)(k - dispatched), mregions + dispatched);
             rec++;
         }
         for (int j = 0; j < k; j++) *bytes += mregions[j].size;
@@ -1842,7 +1989,7 @@ static void mirror_create(PoolRec *r) {
     // and gives its part up; it never sees a refusal that turns into a mirror.
     __atomic_add_fetch(&mirror_gen, 1, __ATOMIC_RELEASE);
     if (r->kind != POOL_IMPORT || !r->buf || !n) return ms_set(r, MS_REFUSED);
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     int i = pidx_upper(&pool_index, r->lo) - 1;
     while (i >= 0 && pool_index.e[i].buf != r) i--;
     int alone = i >= 0 && (i == 0 || pool_index.maxhi[i - 1] <= pool_index.e[i].lo) &&
@@ -1926,6 +2073,37 @@ static void mirror_retire(void *arg) {
     destroy_rec(vk_ctx(), arg);
 }
 
+// The CPU rewrote the pages of the n runs at run (offsets from import_lo, ascending and disjoint, as mirror_sync queues
+// them): they are no longer kept GPU writes (mirror_lock held). One merge of the two sorted lists into a scratch array
+// that then becomes the pool's list. Cutting page by page, each cut a binary search and, when it split or emptied a
+// range, a memmove of the list's tail, held mirror_lock through a sync of the 450 MiB arena in the Hilltop Layer of
+// Surf Hills (3.2.0), where the CPU rewrites the terrain records' pages every frame: the slice workers waited 3.9 ms a
+// frame for the lock (up to 1.9 ms at a time) and the replay took 2.4 ms longer.
+static void kept_cut(PoolRec *r, const MRange *run, int n) {
+    static struct KeptRange *out;   // mirror_lock (or the replay thread alone): the next list, swapped with r->kept
+    static int cout;
+    while (cout < r->nkept + n) grow((void **)&out, &cout, sizeof *out);   // a run splits at most one range
+    struct KeptRange *in = r->kept;
+    int i = 0, o = 0;
+    for (int j = 0; j < n && i < r->nkept; j++) {
+        uint64_t a = run[j].off, b = a + run[j].size;
+        while (i < r->nkept && in[i].hi <= a) out[o++] = in[i++];
+        while (i < r->nkept && in[i].lo < b) {
+            if (in[i].lo < a) out[o++] = (struct KeptRange){in[i].lo, a};
+            if (in[i].hi > b) {   // what is left above the run may meet the next one
+                in[i].lo = b;
+                break;
+            }
+            i++;
+        }
+    }
+    while (i < r->nkept) out[o++] = in[i++];
+    r->kept = out, out = in;
+    int c = r->ckept;
+    r->ckept = cout, cout = c;
+    r->nkept = o;
+}
+
 // Replay thread, the first access of this submission: queues the copies of the pages written since the last sync.
 static void mirror_sync(PoolRec *r) {
     int locked = mirror_lock_if_shared();
@@ -1946,6 +2124,9 @@ static void mirror_sync(PoolRec *r) {
         mrep.sync_queries += snap_regions(r0, r1, mepoch);
     }
     uint32_t since = r->mgen;
+    int p0 = npend > 0 && pend[npend - 1].r == r ? npend - 1 : npend;   // range_add may extend the last entry
+    uint64_t own = 0;
+    int skip_own = RT_KNOB_ON(mirror_own);
     for (uint64_t k = r0; k <= r1; k++) {
         if (reg_max[k] <= since) continue;
         uint64_t a = k << SNAP_SHIFT, b = a + (1ull << SNAP_SHIFT);
@@ -1953,10 +2134,21 @@ static void mirror_sync(PoolRec *r) {
         if (b > hi) b = hi;
         const uint32_t *ch = gen_chunk[a >> GEN_CHUNK_SHIFT];   // a 2 MiB region lies in one chunk
         if (!ch) continue;
-        for (uint64_t x = a; x < b; x += 1ull << GEN_PAGE_SHIFT)
-            if (ch[(x >> GEN_PAGE_SHIFT) & (GEN_PER_CHUNK - 1)] > since)
-                range_add(&pend, &npend, &cpend, r, x - lo, 1ull << GEN_PAGE_SHIFT);
+        const uint32_t *oc = skip_own ? own_chunk[a >> GEN_CHUNK_SHIFT] : NULL;
+        for (uint64_t x = a; x < b; x += 1ull << GEN_PAGE_SHIFT) {
+            uint32_t i = (x >> GEN_PAGE_SHIFT) & (GEN_PER_CHUNK - 1), v = ch[i];
+            if (v <= since) continue;
+            if (oc && oc[i] == v) {   // the mirror's own GPU write is the page's newest (vk_gpu_written_into)
+                own++;
+                continue;
+            }
+            range_add(&pend, &npend, &cpend, r, x - lo, 1ull << GEN_PAGE_SHIFT);
+        }
     }
+    mrep.own_bytes += own << GEN_PAGE_SHIFT;
+    // The pages the CPU rewrote get the guest's bytes in the mirror: they are no longer GPU-only. A kept page whose
+    // newest stamp is the GPU write that kept it is left out above, so it stays kept.
+    if (r->nkept && npend > p0) kept_cut(r, pend + p0, npend - p0);
     r->mgen = gen_now;
     if (excl) plat_mutex_unlock(&gen_lock);
     else plat_mutex_unlock_shared(&gen_lock);
@@ -1967,7 +2159,21 @@ static void mirror_sync(PoolRec *r) {
         plat_mutex_unlock(&flush_lock);
         a = a > lo ? a & ~0xfffull : lo;
         b = b < hi ? (b + 0xfff) & ~0xfffull : hi;
-        if (a < b) range_add(&pend, &npend, &cpend, r, a - lo, b - a);
+        // Pages wholly inside a kept GPU write hold the GPU's bytes, not the guest's: a flush range that merely spans them
+        // (the pool's flushes are one bounding box) must not copy the stale guest bytes over them. A real CPU write to
+        // such a page still comes in through its page generation above.
+        uint64_t x = a - lo, e = b - lo;
+        int k = 0, n = r->nkept;
+        while (k < n) {   // first kept range ending above x
+            int m = (k + n) / 2;
+            if (r->kept[m].hi <= x) k = m + 1;
+            else n = m;
+        }
+        for (; x < e && k < r->nkept && r->kept[k].lo < e; k++) {
+            if (r->kept[k].lo > x) range_add(&pend, &npend, &cpend, r, x, r->kept[k].lo - x);
+            if (r->kept[k].hi > x) x = r->kept[k].hi;
+        }
+        if (x < e) range_add(&pend, &npend, &cpend, r, x, e - x);
     }
     mrep.syncs++;
     mrep.sync_t += qpc() - t0;
@@ -1984,6 +2190,7 @@ void vk_mem_use(VkMemSpan *sp) {
         // thread, and a part that ran while one was made is dropped (vk_mem_mirror_gen). The workers of sliced passes
         // make it under mirror_lock, and the first of them to get the lock does.
         if (vk_spec_helper()) { vk_spec_fail(VK_SPEC_MIRROR); return; }
+        vk_texture_hold_barrier();   // the walk, with a pass end held back: its slices resolve the pool as it was
         int locked = mirror_lock_if_shared();
         if (ms_get(r) == MS_NONE) mirror_create(r);
         mirror_unlock(locked);
@@ -2036,11 +2243,106 @@ void vk_mem_gpu_wrote(const VkMemSpan *sp, uint64_t size) {
     *k = (__typeof__(*k)){r, sp->offset, size, sub};
 }
 
+// A GPU write that stays in the mirror (the geometry stage's storage, vk_exec_draw.c gs_storage_writeback). Re-uploads
+// (mirror_sync) work on whole 4 KiB pages, so the bytes of the range that share a page with other data go back to guest
+// memory as usual, and a CPU write or flush there copies the page, GPU bytes included, back into the mirror. The pages
+// wholly inside the range are noted in the pool's kept list, which mirror_sync leaves out of its flush ranges.
+// The thread notes them in a list of its own, without mirror_lock, and vk_mem_mirror_end merges every thread's into
+// the pools' lists (kept_take). Nothing reads a pool's list for this submission's writes before that: the first bind of
+// a pool in a submission syncs it (vk_mem_use), so its sync and flush ranges come before any write the GPU keeps there,
+// and the uniform snapshot asks at the start of the next submission (vk_mem_kept_overlaps). An insertion under
+// mirror_lock per range, a memmove of the list's tail each, made the slice workers wait for the lock.
+// Returns whether it kept any page; 0 means every byte went the vk_mem_gpu_wrote way (no mirror, or no whole page), so
+// guest memory will hold the GPU's bytes and the caller treats the write as an ordinary one.
+int vk_mem_gpu_kept(const VkMemSpan *sp, uint64_t size) {
+    vk_spec_event();
+    PoolRec *r = sp->pool;
+    if (!r || ms_get(r) != MS_ON || sp->buffer != r->mbuf || !size) return 0;
+    const uint64_t page = 1ull << GEN_PAGE_SHIFT, a = r->import_lo + sp->offset, b = a + size;
+    uint64_t pa = (a + page - 1) & ~(page - 1), pb = b & ~(page - 1);
+    if (pa >= pb) return vk_mem_gpu_wrote(sp, size), 0;   // no whole page
+    // As in vk_mem_gpu_wrote, a range this thread already kept in this submission is in the list.
+    static _Thread_local struct { const PoolRec *r; uint64_t off, size; uint32_t sub; } seen[128];
+    __typeof__(seen[0]) *k = &seen[((uintptr_t)r >> 6 ^ sp->offset >> 4) & 127];
+    uint32_t sub = __atomic_load_n(&msub, __ATOMIC_RELAXED);
+    if (k->r == r && k->sub == sub && k->off == sp->offset && k->size >= size) return 1;
+    if (a < pa) vk_mem_gpu_wrote(&(VkMemSpan){.pool = r, .buffer = sp->buffer, .offset = sp->offset}, pa - a);
+    if (pb < b) vk_mem_gpu_wrote(&(VkMemSpan){.pool = r, .buffer = sp->buffer, .offset = pb - r->import_lo}, b - pb);
+    WbLocal *w = wb_local();
+    range_add(&w->k, &w->nk, &w->ck, r, pa - r->import_lo, pb - pa);
+    *k = (__typeof__(*k)){r, sp->offset, size, sub};
+    return 1;
+}
+
+// One pool's kept ranges of the submission (sorted by offset) merged into its list, overlapping or touching ranges
+// joined (mirror_lock held).
+static void kept_merge(PoolRec *r, const MRange *add, int n) {
+    static struct KeptRange *out;   // the next list, swapped with r->kept
+    static int cout;
+    while (cout < r->nkept + n) grow((void **)&out, &cout, sizeof *out);
+    int i = 0, j = 0, o = 0;
+    while (i < r->nkept || j < n) {
+        struct KeptRange x;
+        if (j >= n || (i < r->nkept && r->kept[i].lo <= add[j].off)) x = r->kept[i++];
+        else x = (struct KeptRange){add[j].off, add[j].off + add[j].size}, j++;
+        if (o && x.lo <= out[o - 1].hi) {
+            if (x.hi > out[o - 1].hi) out[o - 1].hi = x.hi;
+        } else out[o++] = x;
+    }
+    struct KeptRange *old = r->kept;
+    int c = r->ckept;
+    r->kept = out, r->ckept = cout, r->nkept = o;
+    out = old, cout = c;
+}
+
+// vk_mem_mirror_end, no slice being recorded: every thread's kept ranges of the submission into the pools' lists.
+static void kept_take(void) {
+    static MRange *all, *sbuf;
+    static int call;
+    static size_t scap;
+    int n = 0;
+    // Most submissions keep nothing: skip the lock and the sort. The slices have ended, so no thread adds to its list now.
+    for (WbLocal *w = wb_locals; w; w = w->next) n += w->nk;
+    if (!n) return;
+    n = 0;
+    plat_mutex_lock(&mirror_lock);
+    for (WbLocal *w = wb_locals; w; w = w->next) {
+        while (call < n + w->nk) grow((void **)&all, &call, sizeof *all);
+        if (w->nk) memcpy(all + n, w->k, sizeof *all * (size_t)w->nk);
+        n += w->nk, w->nk = 0;
+    }
+    sort_ranges(all, (size_t)n, &sbuf, &scap);
+    for (int i = 0, j; i < n; i = j) {
+        for (j = i + 1; j < n && all[j].r == all[i].r; j++) {}
+        kept_merge(all[i].r, all + i, j - i);
+    }
+    plat_mutex_unlock(&mirror_lock);
+}
+
+// Whether a kept GPU write (vk_mem_gpu_kept) lies in [addr, addr+size): guest memory there is stale, so
+// vk_usnap.c vk_usnap_begin does not copy it into a uniform snapshot.
+int vk_mem_kept_overlaps(uint64_t addr, uint64_t size) {
+    VkMemSpan sp;
+    if (!size || !vk_mem_resolve(addr, size, &sp) || !sp.pool) return 0;
+    PoolRec *r = sp.pool;
+    if (ms_get(r) != MS_ON) return 0;
+    uint64_t lo = addr - r->import_lo, hi = lo + size;
+    int locked = mirror_lock_if_shared(), hit = 0;
+    for (int a = 0, b = r->nkept; a < b && !hit;) {
+        int k = (a + b) / 2;
+        if (r->kept[k].hi <= lo) a = k + 1;
+        else if (r->kept[k].lo >= hi) b = k;
+        else hit = 1;
+    }
+    mirror_unlock(locked);
+    return hit;
+}
+
 void nvn_pool_flushed(const pool_t *p, uint64_t off, uint64_t size) {
     if (!vk_mirror_on || !size || !p->mem) return;
     plat_inc64(&m_flush_calls);
     plat_add64(&m_flush_bytes, (int64_t)size);
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     const pidx_ent *e = pidx_find(&pool_index, (uintptr_t)p->mem, 0);
     PoolRec *r = e && e->key == p ? e->buf : NULL;
     if (r && ms_get(r) == MS_ON) {
@@ -2084,7 +2386,7 @@ void vk_mem_mirror_begin(void) {
     mepoch = vk_texture_epoch();
     uint64_t q = 0, run0 = 0, run1 = 0;
     int have = 0;
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     plat_mutex_lock(&gen_lock);
     ww_ep++;
     uint64_t b0 = ww_bytes;
@@ -2134,12 +2436,36 @@ typedef struct { uint32_t sub; int n; VkBuffer buf; VmaAllocation alloc; const u
 static int ver_i;
 static uint64_t ver_off;
 
-// The CPU wrote the page since the mirror's sync that mgen records: stamped later, or its write-watch bit is set.
+// The CPU wrote the page since the mirror's sync that mgen records: stamped later, or its write-watch bit is set. A
+// later stamp that mirror_sync skips as the mirror's own GPU write does not count, so verify compares those pages: the
+// skip is only right while the guest bytes equal the mirror's. Read under gen_lock: a write-watch query (snap_regions,
+// vk_mem_changed) clears the OS bits before it stamps the pages, both under the lock held exclusively, and a page read
+// between the two had neither, so a page the CPU had just rewritten counted as a mismatch.
 static int page_dirty(uint64_t a, uint32_t mgen) {
+    plat_mutex_lock_shared(&gen_lock);
     uint32_t *s = gen_slot(a, 0);
-    if (s && __atomic_load_n(s, __ATOMIC_RELAXED) > mgen) return 1;
+    int dirty = 0;
+    if (s && *s > mgen) {   // s is set, so the chunk index is in range
+        const uint32_t *oc = RT_KNOB_ON(mirror_own) ? own_chunk[a >> GEN_CHUNK_SHIFT] : NULL;
+        dirty = !oc || oc[(a >> GEN_PAGE_SHIFT) & (GEN_PER_CHUNK - 1)] != *s;
+    }
     uint64_t p[1];
-    return mem_written_peek(a, 1ull << GEN_PAGE_SHIFT, p, 1) != 0;   // UINT64_MAX (not watched) counts as written
+    if (!dirty) dirty = mem_written_peek(a, 1ull << GEN_PAGE_SHIFT, p, 1) != 0;   // UINT64_MAX (not watched) counts
+    plat_mutex_unlock_shared(&gen_lock);
+    return dirty;
+}
+
+static int kept_page(PoolRec *r, uint64_t off) {   // completion thread: takes mirror_lock whatever the replay's mode
+    plat_mutex_lock(&mirror_lock);
+    int hit = 0;
+    for (int a = 0, b = r->nkept; a < b && !hit;) {
+        int k = (a + b) / 2;
+        if (r->kept[k].hi <= off) a = k + 1;
+        else if (r->kept[k].lo > off) b = k;
+        else hit = 1;
+    }
+    plat_mutex_unlock(&mirror_lock);
+    return hit;
 }
 
 static void verify_cb(void *arg) {   // completion thread
@@ -2159,6 +2485,7 @@ static void verify_cb(void *arg) {   // completion thread
             const uint8_t *m = j->map + s->dst + o, *g = (const uint8_t *)(uintptr_t)a;
             pages++;
             if (!memcmp(m, g, 1ull << GEN_PAGE_SHIFT)) continue;
+            if (kept_page(r, s->off + o)) { skipped++; continue; }   // a kept GPU write: guest memory is stale on purpose
             if (page_dirty(a, s->mgen)) { skipped++; continue; }
             bad++;
             if (plat_inc32(&logged) <= VERIFY_LOG) {
@@ -2184,7 +2511,7 @@ static int verify_record(VkCommandBuffer cb, uint64_t fence) {
     VJob *j = calloc(1, sizeof *j);
     if (!j) rt_fatal("vk: out of memory");
     uint64_t left = VERIFY_BYTES, dst = 0;
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     for (int tries = 0; nm && left && j->n < VERIFY_SAMPLES && tries <= nm; tries++) {
         if (ver_i >= nm) ver_i = 0, ver_off = 0;
         PoolRec *r = mlist[ver_i];
@@ -2220,7 +2547,7 @@ static int verify_record(VkCommandBuffer cb, uint64_t fence) {
 int vk_mem_mirror_end(VkCommandBuffer cb, uint64_t fence) {
     if (!vk_mirror_on) return 0;
     int rec = 0;
-    if (__atomic_load_n(&wb_locals, __ATOMIC_ACQUIRE)) wb_locals_take();
+    if (__atomic_load_n(&wb_locals, __ATOMIC_ACQUIRE)) wb_locals_take(), kept_take();
     if (nwbl) {
         VkPipelineStageFlags2 stage = VK_PIPELINE_STAGE_2_COPY_BIT;
         VkAccessFlags2 reads = VK_ACCESS_2_TRANSFER_READ_BIT, writes = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -2281,12 +2608,14 @@ static void mirror_log(uint64_t frame) {
                  (long long)plat_xchg64(&v_mismatch, 0));
     rt_log("mem: mirror frame %llu: pools %lld, %.1f MiB device-local; stay imported: budget %lld (%.1f MiB), untracked "
            "%lld, overlapping %lld, failed %lld; per frame: submits %.2f, syncs %.1f, upload %.3f MiB in %.1f ranges, "
-           "first use %.2f pools %.3f MiB, write-back %.3f MiB in %.1f ranges, flush calls %.1f (%.3f MiB), queries "
-           "%.1f pre-snap (%.1f MiB) + %.1f sync, prologues %.2f, tracking cpu %.3f ms (pre-snap %.3f, syncs %.3f)%s",
+           "first use %.2f pools %.3f MiB, own GPU writes not copied in %.3f MiB, write-back %.3f MiB in %.1f ranges, "
+           "flush calls %.1f (%.3f MiB), queries %.1f pre-snap (%.1f MiB) + %.1f sync, prologues %.2f, tracking cpu "
+           "%.3f ms (pre-snap %.3f, syncs %.3f)%s",
            (unsigned long long)frame, (long long)m_live_n, m_live_bytes / M, (long long)m_refused_n[MR_BUDGET],
            m_refused_bytes[MR_BUDGET] / M, (long long)m_refused_n[MR_UNTRACKED], (long long)m_refused_n[MR_OVERLAP],
            (long long)m_refused_n[MR_ALLOC], a.subs / f, a.syncs / f, a.upload_bytes / f / M, a.upload_copies / f,
-           a.first_n / f, a.first_bytes / f / M, a.wb_bytes / f / M, a.wb_copies / f, fc / f, fb / f / M,
+           a.first_n / f, a.first_bytes / f / M, a.own_bytes / f / M, a.wb_bytes / f / M, a.wb_copies / f, fc / f,
+           fb / f / M,
            a.presnap_queries / f, a.presnap_bytes / f / M, a.sync_queries / f, a.prologues / f, qpc_ms(a.presnap_t + a.sync_t) / f,
            qpc_ms(a.presnap_t) / f, qpc_ms(a.sync_t) / f, ver);
 
@@ -2354,7 +2683,7 @@ void vk_mem_class_log(const VkPhysicalDeviceProperties *p, const VkPhysicalDevic
                               f & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT ? " LAZY" : "");
     }
     rt_log("%s", line);
-    mirror_mode(discrete);
+    mirror_mode(discrete, p->vendorID);
 }
 
 // ---------------------------------------------------------------- upload batches and deferred destruction
@@ -2423,6 +2752,13 @@ static int ninflight, cap_inflight;
 static Batch *spare;                  // completed batches whose command buffer and fence are reused
 static int nspare, cap_spare;
 static uint64_t next_seq, done_seq;   // batches handed out / completed (all batches up to done_seq)
+// vk_upload_flush(1) waits for a batch's fence with cmd_lock let go, so the replay's own flushes (every split part) do
+// not wait behind another thread's GPU wait: pinned is the batch being waited on, whose fence retire keeps out of the
+// spare list until the waiter is done with it (pinned_done); wait_lock lets one thread wait at a time.
+static uint64_t pinned;               // cmd_lock: seq of the batch a waiter waits on, 0 none
+static int pinned_done;               // cmd_lock: retire met it: the waiter puts it in the spare list
+static Batch pinned_batch;
+static PlatMutex wait_lock = PLAT_MUTEX_INIT;
 static Dead *dead;
 static int ndead, cap_dead;
 static uint64_t tl_protected;         // newest submission being recorded or submitted; guards deferred destruction
@@ -2459,6 +2795,10 @@ static void retire(VkCtx *c, int wait_all) {
         }
         free_staging(c, b);
         done_seq = b->seq;
+        if (b->seq == pinned) {   // a waiter still waits on its fence (vk_upload_flush)
+            pinned_batch = *b, pinned_done = 1;
+            continue;
+        }
         if (nspare == cap_spare) grow((void **)&spare, &cap_spare, sizeof *spare);
         spare[nspare++] = *b;
     }
@@ -2603,16 +2943,34 @@ uint64_t vk_upload_flush(int wait) {
     }
     if (c && wait) {
         uint64_t w0 = ninflight && done_seq < seq ? kern_now_ns() : 0;
+        // Without cmd_lock when this thread holds it once (a caller holding it around the flush keeps it for the wait).
+        int unlocked = cmd_lock.depth == 1;
+        if (unlocked && ninflight && done_seq < seq) {
+            plat_rmutex_unlock(&cmd_lock);
+            plat_mutex_lock(&wait_lock);
+            plat_rmutex_lock(&cmd_lock);
+        }
         while (ninflight && done_seq < seq) {
+            VkFence f = inflight[0].fence;
+            if (unlocked) pinned = inflight[0].seq, pinned_done = 0, plat_rmutex_unlock(&cmd_lock);
             // A lost device returns at once and its fence never signals: without this check the loop spins forever
             // (a guest thread at 100% of a core and an idle GPU, with no fault reported).
-            VkResult w = vkWaitForFences(c->device, 1, &inflight[0].fence, VK_TRUE, UINT64_MAX);
+            VkResult w = vkWaitForFences(c->device, 1, &f, VK_TRUE, UINT64_MAX);
+            if (unlocked) plat_rmutex_lock(&cmd_lock);
             if (w != VK_SUCCESS && w != VK_TIMEOUT) {
                 vk_device_fault_report(w);
                 rt_fatal("vk: upload wait failed (%d)", (int)w);
             }
             retire(c, 0);
+            if (unlocked) {
+                if (pinned_done) {
+                    if (nspare == cap_spare) grow((void **)&spare, &cap_spare, sizeof *spare);
+                    spare[nspare++] = pinned_batch;
+                }
+                pinned = 0, pinned_done = 0;
+            }
         }
+        if (unlocked && w0) plat_mutex_unlock(&wait_lock);
         if (w0) plat_add64(&up_wait_ns, (int64_t)(kern_now_ns() - w0));
     }
     if (c) collect_locked(c);
@@ -2674,7 +3032,7 @@ void vk_mem_collect(void) {
 
 void vk_mem_stats(VkMemStats *s) {
     memset(s, 0, sizeof *s);
-    plat_mutex_lock_shared(&pool_lock);
+    pool_lock_shared();
     for (int i = 0; i < pool_index.n; i++) {
         const PoolRec *r = pool_index.e[i].buf;
         if (r->kind == POOL_IMPORT) s->imported_pools++;
@@ -2744,7 +3102,7 @@ void vk_mem_shutdown(void) {
     for (int i = 0; i < pool_index.n; i++) destroy_rec(c, pool_index.e[i].buf);
     pool_index.n = 0;
     nm = npend = nwbl = 0;   // mirrors went with their pools
-    for (WbLocal *w = wb_locals; w; w = w->next) w->n = 0;
+    for (WbLocal *w = wb_locals; w; w = w->next) w->n = w->nk = 0;   // pending kept ranges point at pools just freed
     plat_mutex_lock(&shadow_lock);
     nstouch = nspend = nsblocked = spend_dirty = 0;   // shadows too
     s_live_n = s_live_bytes = 0;

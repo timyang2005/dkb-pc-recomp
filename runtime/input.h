@@ -17,14 +17,47 @@ void input_menu(int open);
 void input_file_opened(const char *path);
 // Exit: if TOTK_INPUT_SCRIPT was loaded and events are still pending, logs "input: script ended ..." once. Safe without a script.
 void input_script_report(void);
-// The gamepad alone, for the menu: Switch button bits and the left stick (up +y). 0 without a connected gamepad.
-// Minus+Plus combo and the neutral pad while the menu is open (input_map.c, window-system free): *held is the caller's memory
-// of the combo, sticks are lx, ly, rx, ry. Returns 1 in the poll where the combo goes down (toggle the menu once).
+// Physical Start/Back hold (input_map.c, window-system free). buttons contains B_PLUS/B_MINUS from the selected pad
+// before remapping, not keyboard input. Consumes those bits once both overlap, until both are released. Returns 1
+// after 500 ms continuously together, once per hold. A newly selected device already holding both must release first.
+typedef struct {
+    uint64_t since_ns;
+    uint32_t device;
+    int timing, consumed, fired;
+} InputHoldGate;
+int input_hold_gate(InputHoldGate *gate, uint32_t device, uint64_t now_ns, uint64_t *buttons);
+// Default mapped Plus+Minus chord: toggle once until both are released; an open menu leaves neutral game input.
 int input_menu_gate(int *held, int menu_open, uint64_t *buttons, int32_t sticks[4]);
 int input_overlay_gate(int *held, uint64_t *buttons);   // L3+R3: 1 in the poll both go down
+// The gamepad alone, for the menu: Switch button bits and the left stick (up +y). 0 without a connected gamepad.
 int input_pad_read(uint64_t *buttons, int32_t *lx, int32_t *ly);
+// Device snapshots are allocated with malloc; caller frees *devices. Calls are input-lock protected.
+// key persists GUID/name/serial identity, or an ordinal when the device has no serial number.
+typedef struct { uint32_t id; char key[128], name[256]; } InputPadDevice;
+int input_pad_devices(InputPadDevice **devices);
+// Window-system-free hot-swap policy (input_map.c). ids is owned by the state; free it when discarding a test state.
+// Only input polling advances this history. Menu enumeration must not consume arrival notifications.
+typedef struct {
+    uint32_t *ids, pending;
+    int count, initialized, automatic, force;
+    char preferred[128];
+} InputPadSelection;
+uint32_t input_pad_choose(InputPadSelection *s, const InputPadDevice *devices, int count,
+                          const char *preferred, uint32_t current);
+// The menu calls this after an explicit choice, including reselecting the saved preference after an auto takeover.
+void input_pad_selection_changed(void);
+int input_pad_automatic(void);   // read-only UI status: automatic takeover/fallback is currently in effect
+// Read-only UI metadata for the actual selected handle. Does not initialize, rescan, switch or poll input.
+// type is SDL_GamepadType; 0/disconnected returns an empty snapshot. No SDL dependency in this public header.
+typedef struct { uint32_t id; int type; char name[256]; } InputPadInfo;
+int input_pad_info(InputPadInfo *info);
+
 // The gamepad layout in effect (PAD_LAYOUT_*, input_map.h; TOTK_PAD_LAYOUT, live); -1 without a gamepad. Any thread.
 int input_pad_layout(void);
+// romfs.c overlay_init, at start: 1 when a PlayStation pad (DualShock 3 or 4, DualSense) is connected, for the
+// PlayStation button prompts (pad_prompts = auto). Starts SDL's gamepad subsystem if input has not yet; 0 with
+// TOTK_INPUT=none or when SDL cannot start.
+int input_sony_pad_present(void);
 // The label on a face button of the open gamepad (input_map.h PAD_SOUTH..PAD_NORTH, as SDL reports it); PAD_LABEL_NONE for another
 // button, an unknown label or no gamepad. Any thread.
 enum { PAD_LABEL_NONE, PAD_LABEL_A, PAD_LABEL_B, PAD_LABEL_X, PAD_LABEL_Y, PAD_LABEL_CROSS, PAD_LABEL_CIRCLE,
@@ -58,6 +91,10 @@ int input_mouse_direct_recent(void);
 // Rumble: SDL_RumbleGamepad on the open gamepad, low (heavy, left) and high (light, right) motor 0..65535 for ms
 // milliseconds. 1 if a gamepad with rumble took it. Callable from any thread.
 int input_rumble(uint16_t low, uint16_t high, uint32_t ms);
+// HD rumble for a Switch Pro Controller or Joy-Con (TOTK_RUMBLE_HD=auto): v[side][] = amplitude and frequency in Hz of the
+// low band, then of the high band, sent as one SDL_SendGamepadEffect packet; ms == 0 sends neutral. While it applies,
+// input_rumble leaves that pad alone. 1 if the pad took it; any other pad returns 0. Callable from any thread.
+int input_rumble_hd(const float v[2][4], uint32_t ms);
 // Motor value for a normalised amplitude: pow(a, curve) * strength, saturated to 0..65535. Pure.
 uint16_t rumble_motor(float a, float curve, float strength);
 // TOTK_RUMBLE_TRIGGERS=1: input_rumble also drives the impulse triggers (Xbox) with the high motor's value.

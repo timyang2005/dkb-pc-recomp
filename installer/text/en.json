@@ -44,7 +44,7 @@
  "check.toolchain_broken": "The bundled compiler does not work: {detail}",
  "check.glibc_old": "This system's C library is glibc {version}; the setup's compiler needs {need} or later (Ubuntu 22.04, Debian 12, Fedora 35, SteamOS 3 and newer have it). Updating the system fixes this.",
  "check.host_probe_failed": "The computer check did not run (exit code {code}).",
- "check.cpu_no_avx2": "This processor lacks AVX2 (x86-64-v3), which the game needs. Intel Haswell (2013) or AMD Excavator / Zen and newer have it.",
+ "check.cpu_no_avx2": "This processor lacks SSE4.2 and POPCNT (x86-64-v2), which the game needs.",
  "check.vulkan_missing": "No Vulkan driver is installed. Install the latest driver for your graphics card.",
  "check.vulkan_no_device": "Vulkan finds no graphics card. Install the latest driver for your graphics card.",
  "check.vulkan_too_old": "The game needs a graphics card with Vulkan 1.3; found: {devices}. Update the graphics driver.",
@@ -204,6 +204,7 @@
  "dkb.temp_unrelated": "The temporary folder contains unrelated files: {path}. Choose another temporary location.",
  "dkb.temp_unsafe_path": "The work folder {path} has characters (such as parentheses) that the shader translator build cannot pass to the linker. Move the release folder, or pass --temp with a path made of letters, digits, spaces, dots, dashes and underscores.",
  "dkb.romfs_empty": "No RomFS files were found in {path}.",
+ "dkb.romfs_image": "The folder {path} holds a RomFS image, not extracted RomFS files. Select the .nup package instead, or extract the RomFS as a folder.",
  "dkb.input_changed": "The source changed while setup was reading it: {path}. Close programs modifying the dump and try again.",
  "dkb.pack_invalid": "The packed RomFS failed its integrity check in {path}: {detail}.",
  "dkb.tools_missing": "Required build tools or sources are missing: {paths}.",
@@ -225,6 +226,10 @@
  "step.dkb_data": "Copying ExeFS and verifying packed RomFS",
  "step.dkb_translator": "Preparing the shader translator",
  "step.dkb_shaders": "Translating the game's shaders (once, a few minutes)",
+ "step.dkb_wide": "Preparing ultrawide backgrounds and HUD layouts",
+ "warn.dkb_wide_failed": "Ultrawide layout generation failed (exit code {code}); setup will continue without installing new overlays. Existing overlays are unchanged. Details: {log}. Rerun setup to retry.",
+ "step.dkb_prompts": "Preparing PlayStation button prompts",
+ "warn.dkb_prompts_failed": "PlayStation button prompts could not be prepared (exit code {code}); setup will continue and the game keeps the Switch prompts. Details: {log}. Rerun setup to retry.",
  "step.dkb_verify": "Checking the completed installation",
  "phase.check.dkb_base": "Checking the ExeFS checksums",
  "phase.check.dkb_hash": "Checking the RomFS source files",
@@ -234,5 +239,7 @@
  "phase.lift.dkb_run": "Translating main and sdk with the Bananza patches",
  "phase.compile.dkb_run": "Compiling dkb.exe",
  "phase.dkb_shaders.dkb_run": "Translating the shader stages found in the game files",
- "phase.dkb_verify.dkb_run": "Running the installed program's self-checks"
+ "phase.dkb_verify.dkb_run": "Running the installed program's self-checks",
+ "phase.dkb_wide.dkb_run": "Preparing centered and edge HUD layouts for each ultrawide resolution",
+ "phase.dkb_prompts.dkb_run": "Drawing the PlayStation symbols into the game's button font"
 }

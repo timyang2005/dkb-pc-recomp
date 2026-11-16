@@ -150,6 +150,13 @@ void vk_exec_par_hazard(void);
 // As vk_exec_par_hazard for a draw whose effect depends on the order of draws across slices (a storage buffer write):
 // the pass's targets are not sliced again from the next pass on.
 void vk_exec_par_order_hazard(void);
+// As vk_exec_par_order_hazard for a draw that needs the primary every time (a depth twin, vk_exec_draw.c twin_prepare).
+void vk_exec_par_ban(void);
+// The walk (the submitting thread outside a slice) has a pass end held back whose slices are not all recorded yet
+// (vk_exec.c par_defer); vk_exec_held_wait waits for them, recording none itself. For the texture cache's barrier
+// (vk_texture.c hold_barrier), which lets every lock the slices take go first.
+int vk_exec_held_pending(void);
+void vk_exec_held_wait(void);
 // vk_exec_xfer.c: 1 while occlusion queries count draws (a sliced pass is not started then).
 int vk_exec_oq_counting(void);
 int vk_exec_oq_begin_outside(VkExec *ex, VkQueryControlFlags *flags, int *open);   // vk_exec_xfer.c, sliced passes
@@ -223,6 +230,12 @@ void vk_c0_fill(uint8_t bank[VK_C0_BYTES], int stage, const p_bind_buf ssbo[16],
 // vk_exec_draw.c: OP_DRAW, OP_DRAW_IDX, OP_DISPATCH, OP_BIND_* (program, state, vattr, vstream, vbuf, ubo, ssbo, tex,
 // samp, img), OP_UPDATE_UB, OP_DRAW_IDX_IND, OP_DISPATCH_IND. payload: nvn_op_payload of the record.
 void vk_exec_op_draw(VkExec *ex, uint32_t op, const void *payload);
+// TOTK_DRAW_MERGE (vk_exec_draw.c): ops[0..n) are the ops from an indexed draw on, in replay order. When they start a
+// run of draws that differ only in uniform block c4, the run is replayed here, as one instanced draw when it can be,
+// and the return is the ops replayed (*draws: the draws among them); 0: the caller replays ops[0]. merge_on: the
+// knob is on for this draw (TOTK_DRAW_MERGE=ab alternates it), so that callers gather the ops only then.
+int vk_exec_draw_merge(VkExec *ex, const op_hdr *const *ops, int n, int *draws);
+int vk_exec_draw_merge_on(void);
 // The aspect a sampled view of img reads (vk_exec_draw.c get_view): stencil for a view in STENCIL depth-stencil mode.
 VkImageAspectFlags vk_exec_view_aspect(const VkTexImage *img, const view_t *v, int hv);
 VkImageView vk_exec_target_view(const VkTexImage *img, VkFormat format, VkImageViewType type, uint32_t aspect,
@@ -259,9 +272,13 @@ VkExecFrame *vk_exec_draw_helper_frame(int k);
 // ---- the threads that record slices of parallel passes (vk_exec.c par_record)
 // Recording thread k (0 the submitting thread, 1 and up the workers) replays its slices into a VkExec whose draw context
 // is vk_exec_draw_slice_ctx(k), so they run the helpers' copy of the translator. _begin, on the submitting thread at a
-// sliced pass's start while no slice is recorded, makes the contexts of threads 0 to threads-1 and gives them the
-// inline uniform updates noted so far; _end, once every slice of the pass is recorded, adds their frame counters to
-// vk_exec_frame.
-void vk_exec_draw_slices_begin(int threads);
+// sliced pass's start, makes the contexts of threads 0 to threads-1 that do not exist yet and copies the inline uniform
+// updates noted so far into snapshot snap (one of VK_EXEC_UPD_SNAPS), which a recording thread points its context at
+// (vk_exec_draw_slice_view) before each slice of that pass: slices of an earlier pass may still be recorded meanwhile
+// (vk_exec.c par_defer); -1 makes the contexts only. _end, while no slice is being recorded, adds their frame counters
+// to vk_exec_frame.
+#define VK_EXEC_UPD_SNAPS 8
+void vk_exec_draw_slices_begin(int threads, int snap);
 struct DrawCtx *vk_exec_draw_slice_ctx(int k);
+void vk_exec_draw_slice_view(struct DrawCtx *c, int snap);
 void vk_exec_draw_slices_end(int threads);

@@ -72,8 +72,8 @@ Each phase ends in a milestone someone else can check. The order follows the cri
       monsterlag): the upscaler's two image rectangles are root table 0, pushed by the game. [#2]
 - [x] Colour grading: the 3D LUT is filled (8x8x8 R11G11B10F, checked in the mining tunnel); the empty LUT was an old build. [#4]
 - [ ] Some textures look blocky (checkerboard rocks) [#5]: the deswizzle now uses the Switch 2 GOB layout, which fixes the gold rock in the tutorial cave; the other rock surfaces still need a check.
-- [ ] Getting past the tutorial cave. [#7] A hand-played run reached the Ingot Isle Cave-In section; respawning
-      there stalled the GPU.
+- [x] Getting past the tutorial cave. [#7] Players now get through several layers (-101, floor 200, Glacier,
+      Layer 500, Tempest); what still stops them is tracked in F6.
 - [ ] Destructible terrain renders black. [#45] Its indirect records are now reset on the host in replay order
       (#48, `TOTK_FIX_INDIRECT_RESET`), which should also end the garbage arguments behind the respawn stall in
       #10 (not retested yet). The index counts come from the geometry stage, still to be lowered and run. Ordinary
