@@ -31,8 +31,8 @@ from installer import state as statefile  # noqa: E402
 from installer.events import Reporter  # noqa: E402
 from installer.runner import Context  # noqa: E402
 from installer.steps import all_steps  # noqa: E402
-from installer.guilogic import (DONE, FAILED, PENDING, RUNNING, SKIPPED, Catalog, Form, Model, Process,  # noqa: E402
-                                amount, describe_event, parse_line, windows_ui_language)
+from installer.guilogic import (DONE, FAILED, PENDING, RUNNING, SKIPPED, UI_LANGUAGES, Catalog, Form, Model,  # noqa: E402
+                                Process, amount, describe_event, parse_line, windows_ui_language)
 
 INSTALLED = ROOT / 'build' / 'install-test'
 FIXTURE = ROOT / 'build' / 'inst-gui' / 'e2e-install'
@@ -280,7 +280,7 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(describe_event(cat, {'type': 'start'}), '')
 
     def test_windows_language_is_a_known_value(self):
-        self.assertIn(windows_ui_language(), ('en', 'ru'))
+        self.assertIn(windows_ui_language(), UI_LANGUAGES)
 
 
 BREAK_CHILD = 'import time\nprint("ready", flush=True)\ntime.sleep(60)\n'
@@ -304,7 +304,7 @@ class CancelTest(unittest.TestCase):
 
 
 class SmokeTest(unittest.TestCase):
-    def test_every_screen_in_both_languages(self):
+    def test_every_screen_in_every_language(self):
         try:
             import tkinter  # noqa: F401
         except ImportError:

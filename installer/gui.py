@@ -680,7 +680,7 @@ def grab(root, path):
 
 
 def selftest(layout, shots=None, game='totk'):
-    """Every screen in both languages; the window closes itself. Returns 0 when nothing raised."""
+    """Every screen in every language; the window closes itself. Returns 0 when nothing raised."""
     fix_tcl_paths()
     fix_dpi_awareness()
     root = tk.Tk()

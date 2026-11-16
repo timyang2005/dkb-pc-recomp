@@ -44,7 +44,7 @@
  "check.toolchain_broken": "随附的编译器无法运行：{detail}",
  "check.glibc_old": "此系统的 C 库为 glibc {version}；安装程序的编译器需要 {need} 或更高版本（Ubuntu 22.04、Debian 12、Fedora 35、SteamOS 3 及更新版本自带）。更新系统即可解决。",
  "check.host_probe_failed": "电脑检查没有运行（退出码 {code}）。",
- "check.cpu_no_avx2": "此处理器缺少游戏所需的 AVX2（x86-64-v3）。Intel Haswell（2013）或 AMD Excavator / Zen 及更新产品支持。",
+ "check.cpu_no_avx2": "此处理器缺少游戏所需的 SSE4.2 和 POPCNT（x86-64-v2）。",
  "check.vulkan_missing": "未安装 Vulkan 驱动。请安装显卡的最新驱动。",
  "check.vulkan_no_device": "Vulkan 没有找到显卡。请安装显卡的最新驱动。",
  "check.vulkan_too_old": "游戏需要支持 Vulkan 1.3 的显卡；当前找到：{devices}。请更新显卡驱动。",
@@ -204,6 +204,7 @@
  "dkb.temp_unrelated": "临时文件夹里有无关的文件：{path}。请选择其他临时位置。",
  "dkb.temp_unsafe_path": "工作文件夹 {path} 含有（例如括号）字符，着色器翻译器的构建无法把它们传给链接器。请移动发布文件夹，或用只含字母、数字、空格、点、连字符和下划线的路径作为 --temp。",
  "dkb.romfs_empty": "在 {path} 中没有找到任何 RomFS 文件。",
+ "dkb.romfs_image": "文件夹 {path} 里是 RomFS 镜像，而不是解包出来的 RomFS 文件。请改选 .nup 包，或把 RomFS 解包成文件夹。",
  "dkb.input_changed": "安装程序读取时源数据发生了变化：{path}。请关闭正在改动这份导出的程序，然后重试。",
  "dkb.pack_invalid": "打包的 RomFS 在 {path} 中没有通过完整性检查：{detail}。",
  "dkb.tools_missing": "缺少所需的构建工具或源码：{paths}。",
@@ -224,6 +225,10 @@
  "dkb.nup_zstd": "{path} 中的文件用 zstd 压缩，运行安装程序的 Python 无法解压。请使用 Python 3.14、安装 zstandard 包，或在 PATH 中放一个 zstd 程序。",
  "step.dkb_data": "复制 ExeFS 并校验打包的 RomFS",
  "step.dkb_translator": "准备着色器翻译器",
+ "step.dkb_wide": "准备超宽屏背景与 HUD 布局",
+ "warn.dkb_wide_failed": "超宽屏布局生成失败（退出码 {code}）；安装会继续，只是不安装新的界面文件，已有的界面文件不受影响。详情：{log}。重新运行安装程序可重试。",
+ "step.dkb_prompts": "准备 PlayStation 按键提示",
+ "warn.dkb_prompts_failed": "PlayStation 按键提示准备失败（退出码 {code}）；安装会继续，游戏内仍使用 Switch 提示。详情：{log}。重新运行安装程序可重试。",
  "step.dkb_shaders": "翻译游戏的着色器（只做一次，需几分钟）",
  "step.dkb_verify": "检查已完成的安装",
  "phase.check.dkb_base": "检查 ExeFS 校验和",
@@ -234,5 +239,7 @@
  "phase.lift.dkb_run": "用 Bananza 补丁翻译 main 和 sdk",
  "phase.compile.dkb_run": "编译 dkb.exe",
  "phase.dkb_shaders.dkb_run": "翻译游戏文件中的着色器阶段",
- "phase.dkb_verify.dkb_run": "运行已安装程序的自检"
+ "phase.dkb_verify.dkb_run": "运行已安装程序的自检",
+ "phase.dkb_wide.dkb_run": "为每种超宽屏分辨率准备居中与贴边的 HUD 布局",
+ "phase.dkb_prompts.dkb_run": "把 PlayStation 符号画进游戏的按键字体"
 }

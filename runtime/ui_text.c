@@ -753,6 +753,26 @@ SWKBD_ONLY(text_pt, "Inserir texto", "Introduz um nome", "Cavalo", "OK", "Cancel
 // Simplified Chinese carries the whole menu; Traditional Chinese keeps the software keyboard only (a row with no menu
 // text falls back to English).
 static const char *const text_zh_hans[UI_TEXT_COUNT] = {
+    [UI_MENU_PAD_DEVICE] = "手柄设备",
+    [UI_MENU_PAD_DEVICE_DESC] = "选择使用哪个手柄。改动立即生效。\n\n"
+        "新接入的手柄会自动接管。当前手柄断开时，另一只可用的手柄会接管。\n\n"
+        "手动选择立即生效，并在下次启动时沿用。“自动”从第一个可用的手柄开始，之后接入的手柄仍可接管。\n\n"
+        "键盘和鼠标始终可用。",
+    [UI_MENU_PAD_FULLSCREEN_HOLD] = "长按全屏快捷键",
+    [UI_MENU_PAD_FULLSCREEN_HOLD_DESC] = "关闭：Plus + Minus 打开或关闭设置。\n\n开启：改为长按 Plus + Minus 0.5 秒切换全屏。\n\n两种模式下 Guide/Home 键和键盘 F1 都可用。",
+    [UI_MENU_SHORTCUT_SETTINGS_COMBO_DESC] = "同时按住屏幕上显示的 Plus 和 Minus 绑定来打开或关闭设置。\n\n此快捷键跟随当前的按键绑定。\n\n键盘等效：F1。",
+    [UI_MENU_SHORTCUTS] = "快捷键",
+    [UI_MENU_SHORTCUT_READONLY] = "只读快捷键",
+    [UI_MENU_SHORTCUT_SETTINGS] = "打开设置菜单",
+    [UI_MENU_SHORTCUT_SETTINGS_DESC] = "按 Guide 或 Home 键打开或关闭设置。\n\n键盘等效：F1。\n\n客户端或操作系统必须把这个按键传给游戏。",
+    [UI_MENU_SHORTCUT_FULLSCREEN] = "切换全屏",
+    [UI_MENU_SHORTCUT_FULLSCREEN_DESC] = "同时按住屏幕上显示的两个按键 0.5 秒来切换全屏。\n\n再次使用前请先松开这两个按键。\n\n键盘等效：F11。",
+    [UI_MENU_SHORTCUT_PERFORMANCE] = "切换性能数据",
+    [UI_MENU_SHORTCUT_PERFORMANCE_DESC] = "同时按下两个摇杆按压绑定来循环切换性能数据：关、FPS、完整。\n\n此快捷键跟随当前的摇杆按压绑定。\n\n键盘等效：F10。",
+    [UI_MENU_PAD_CONNECTED] = "已连接",
+    [UI_MENU_PAD_WAITING] = "连接手柄以继续",
+    [UI_MENU_PAD_NONE] = "未连接手柄",
+    [UI_MENU_PAD_SAVED] = "已保存的手柄",
     SWKBD("文字输入", "请输入名字", "马儿", "确定", "取消", "手柄：A 确定，B 取消"),
 
     [UI_MENU_TITLE] = "设置",
@@ -806,9 +826,15 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_MENU_RENDER_SCALE_DESC] = "3D 场景相对于游戏分辨率的尺寸；游戏的 FSR 会把它缩放到该尺寸。高于 100 % "
                                   "可以平滑锯齿（超采样），但很耗 GPU。",
     [UI_MENU_RENDER_SCALE_GAME] = "游戏原生（83 %）",
+    [UI_MENU_SCENE_RES] = "3D 场景分辨率",
+    [UI_MENU_SCENE_RES_DESC] = "“自动”让游戏按负载缩放 3D 场景，通常每边缩到渲染分辨率的三分之二，然后再放大。"
+                               "“完整”以整个渲染分辨率绘制 3D 场景：画面更锐利，但 GPU 开销更高，且不使用放大方式和 DLSS。"
+                               "下次启动时生效。",
+    [UI_MENU_SCENE_RES_AUTO] = "自动（游戏）", [UI_MENU_SCENE_RES_FULL] = "完整",
     [UI_MENU_UPSCALER] = "放大方式",
     [UI_MENU_UPSCALER_DESC] = "当游戏画面小于它在屏幕上或窗口中占据的区域时生效。AMD FSR 1 的边缘比双线性更锐利。",
-    [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "双线性",
+    [UI_MENU_UPSCALER_FSR] = "AMD FSR 1", [UI_MENU_UPSCALER_BILINEAR] = "双线性", [UI_MENU_UPSCALER_DLSS] = "NVIDIA DLSS",
+    [UI_MENU_UPSCALER_FSR3] = "AMD FSR 3.1",
     [UI_MENU_ASPECT] = "显示缩放",
     [UI_MENU_ASPECT_DESC] = "默认保持游戏的画面比例，需要时加黑边。\n"
                             "“拉伸填满”使用整个窗口或屏幕；只有比例不同时画面才会被拉伸。",
@@ -975,7 +1001,7 @@ static const char *const text_zh_hans[UI_TEXT_COUNT] = {
     [UI_PAD_DPAD_LEFT] = "十字键左", [UI_PAD_DPAD_UP] = "十字键上", [UI_PAD_DPAD_RIGHT] = "十字键右",
     [UI_PAD_DPAD_DOWN] = "十字键下", [UI_PAD_ZL] = "左扳机", [UI_PAD_ZR] = "右扳机",
     [UI_PAD_LPADDLE1] = "左背键", [UI_PAD_RPADDLE1] = "右背键",
-    [UI_PAD_LPADDLE2] = "左背键 2", [UI_PAD_RPADDLE2] = "右背键 2",
+    [UI_PAD_LPADDLE2] = "左背键 2", [UI_PAD_RPADDLE2] = "右背键 2", [UI_PAD_TOUCHPAD] = "触摸板",
     [UI_PAD_CROSS] = "Cross", [UI_PAD_CIRCLE] = "Circle", [UI_PAD_SQUARE] = "Square", [UI_PAD_TRIANGLE] = "Triangle",
 
     [UI_MENU_MENU_LANG] = "设置语言", [UI_MENU_MENU_LANG_DESC] = "设置设置菜单和性能悬浮窗的语言。"
